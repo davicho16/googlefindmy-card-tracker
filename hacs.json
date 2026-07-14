@@ -1,0 +1,7 @@
+{
+  "name": "Google FindMy Card Tracker",
+  "render_readme": true,
+  "content_in_root": true,
+  "filename": "googlefindmy-card-tracker.js",
+  "homeassistant": "2023.1.0"
+}
