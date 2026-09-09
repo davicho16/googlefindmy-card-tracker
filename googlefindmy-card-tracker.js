@@ -1,0 +1,2802 @@
+/*!
+ * Google FindMy Card Tracker
+ * A Home Assistant Lovelace card for Google Find My Device / device_tracker entities.
+ * Adds route playback, start/end + numbered markers, direction arrows,
+ * trip statistics, GPX/KML export, a custom date/time range picker and
+ * clustering of long stationary stops on top of an interactive Leaflet map.
+ *
+ * Repository: https://github.com/davicho16/googlefindmy-card-tracker
+ * License: MIT
+ */
+(() => {
+  "use strict";
+
+  const CARD_VERSION = "1.3.1";
+  const CARD_TAG = "googlefindmy-card-tracker";
+  const EDITOR_TAG = "googlefindmy-card-tracker-editor";
+
+  const LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+  const DECORATOR_JS =
+    "https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js";
+
+  // Leaflet's own CSS, vendored inline so it can be injected inside this
+  // card's Shadow DOM (an external <link> does not reliably apply inside a
+  // shadow root). Trimmed of the unused background-image url(images/...)
+  // rules for the default marker icon, since this card never uses Leaflet's
+  // default pin icon (all markers are custom L.divIcon HTML).
+  const LEAFLET_CSS_INLINE = `
+/* required styles */
+
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	}
+.leaflet-container {
+	overflow: hidden;
+	}
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	-webkit-user-select: none;
+	   -moz-user-select: none;
+	        user-select: none;
+	  -webkit-user-drag: none;
+	}
+/* Prevents IE11 from highlighting tiles in blue */
+.leaflet-tile::selection {
+	background: transparent;
+}
+/* Safari renders non-retina tile on retina better with this, but Chrome is worse */
+.leaflet-safari .leaflet-tile {
+	image-rendering: -webkit-optimize-contrast;
+	}
+/* hack that prevents hw layers "stretching" when loading new tiles */
+.leaflet-safari .leaflet-tile-container {
+	width: 1600px;
+	height: 1600px;
+	-webkit-transform-origin: 0 0;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	display: block;
+	}
+.leaflet-container .leaflet-overlay-pane svg {
+	max-width: none !important;
+	max-height: none !important;
+	}
+.leaflet-container .leaflet-marker-pane img,
+.leaflet-container .leaflet-shadow-pane img,
+.leaflet-container .leaflet-tile-pane img,
+.leaflet-container img.leaflet-image-layer,
+.leaflet-container .leaflet-tile {
+	max-width: none !important;
+	max-height: none !important;
+	width: auto;
+	padding: 0;
+	}
+
+.leaflet-container img.leaflet-tile {
+	mix-blend-mode: plus-lighter;
+}
+
+.leaflet-container.leaflet-touch-zoom {
+	-ms-touch-action: pan-x pan-y;
+	touch-action: pan-x pan-y;
+	}
+.leaflet-container.leaflet-touch-drag {
+	-ms-touch-action: pinch-zoom;
+	touch-action: none;
+	touch-action: pinch-zoom;
+}
+.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom {
+	-ms-touch-action: none;
+	touch-action: none;
+}
+.leaflet-container {
+	-webkit-tap-highlight-color: transparent;
+}
+.leaflet-container a {
+	-webkit-tap-highlight-color: rgba(51, 181, 229, 0.4);
+}
+.leaflet-tile {
+	filter: inherit;
+	visibility: hidden;
+	}
+.leaflet-tile-loaded {
+	visibility: inherit;
+	}
+.leaflet-zoom-box {
+	width: 0;
+	height: 0;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	z-index: 800;
+	}
+.leaflet-overlay-pane svg {
+	-moz-user-select: none;
+	}
+
+.leaflet-pane         { z-index: 400; }
+
+.leaflet-tile-pane    { z-index: 200; }
+.leaflet-overlay-pane { z-index: 400; }
+.leaflet-shadow-pane  { z-index: 500; }
+.leaflet-marker-pane  { z-index: 600; }
+.leaflet-tooltip-pane   { z-index: 650; }
+.leaflet-popup-pane   { z-index: 700; }
+
+.leaflet-map-pane canvas { z-index: 100; }
+.leaflet-map-pane svg    { z-index: 200; }
+
+.leaflet-vml-shape {
+	width: 1px;
+	height: 1px;
+	}
+.lvml {
+	behavior: url(#default#VML);
+	display: inline-block;
+	position: absolute;
+	}
+
+
+/* control positioning */
+
+.leaflet-control {
+	position: relative;
+	z-index: 800;
+	pointer-events: visiblePainted;
+	pointer-events: auto;
+	}
+.leaflet-top,
+.leaflet-bottom {
+	position: absolute;
+	z-index: 1000;
+	pointer-events: none;
+	}
+.leaflet-top {
+	top: 0;
+	}
+.leaflet-right {
+	right: 0;
+	}
+.leaflet-bottom {
+	bottom: 0;
+	}
+.leaflet-left {
+	left: 0;
+	}
+.leaflet-control {
+	float: left;
+	clear: both;
+	}
+.leaflet-right .leaflet-control {
+	float: right;
+	}
+.leaflet-top .leaflet-control {
+	margin-top: 10px;
+	}
+.leaflet-bottom .leaflet-control {
+	margin-bottom: 10px;
+	}
+.leaflet-left .leaflet-control {
+	margin-left: 10px;
+	}
+.leaflet-right .leaflet-control {
+	margin-right: 10px;
+	}
+
+
+/* zoom and fade animations */
+
+.leaflet-fade-anim .leaflet-popup {
+	opacity: 0;
+	-webkit-transition: opacity 0.2s linear;
+	   -moz-transition: opacity 0.2s linear;
+	        transition: opacity 0.2s linear;
+	}
+.leaflet-fade-anim .leaflet-map-pane .leaflet-popup {
+	opacity: 1;
+	}
+.leaflet-zoom-animated {
+	-webkit-transform-origin: 0 0;
+	    -ms-transform-origin: 0 0;
+	        transform-origin: 0 0;
+	}
+svg.leaflet-zoom-animated {
+	will-change: transform;
+}
+
+.leaflet-zoom-anim .leaflet-zoom-animated {
+	-webkit-transition: -webkit-transform 0.25s cubic-bezier(0,0,0.25,1);
+	   -moz-transition:    -moz-transform 0.25s cubic-bezier(0,0,0.25,1);
+	        transition:         transform 0.25s cubic-bezier(0,0,0.25,1);
+	}
+.leaflet-zoom-anim .leaflet-tile,
+.leaflet-pan-anim .leaflet-tile {
+	-webkit-transition: none;
+	   -moz-transition: none;
+	        transition: none;
+	}
+
+.leaflet-zoom-anim .leaflet-zoom-hide {
+	visibility: hidden;
+	}
+
+
+/* cursors */
+
+.leaflet-interactive {
+	cursor: pointer;
+	}
+.leaflet-grab {
+	cursor: -webkit-grab;
+	cursor:    -moz-grab;
+	cursor:         grab;
+	}
+.leaflet-crosshair,
+.leaflet-crosshair .leaflet-interactive {
+	cursor: crosshair;
+	}
+.leaflet-popup-pane,
+.leaflet-control {
+	cursor: auto;
+	}
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable {
+	cursor: move;
+	cursor: -webkit-grabbing;
+	cursor:    -moz-grabbing;
+	cursor:         grabbing;
+	}
+
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-image-layer,
+.leaflet-pane > svg path,
+.leaflet-tile-container {
+	pointer-events: none;
+	}
+
+.leaflet-marker-icon.leaflet-interactive,
+.leaflet-image-layer.leaflet-interactive,
+.leaflet-pane > svg path.leaflet-interactive,
+svg.leaflet-image-layer.leaflet-interactive path {
+	pointer-events: visiblePainted;
+	pointer-events: auto;
+	}
+
+/* visual tweaks */
+
+.leaflet-container {
+	background: #ddd;
+	outline-offset: 1px;
+	}
+.leaflet-container a {
+	color: #0078A8;
+	}
+.leaflet-zoom-box {
+	border: 2px dotted #38f;
+	background: rgba(255,255,255,0.5);
+	}
+
+
+/* general typography */
+.leaflet-container {
+	font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+	font-size: 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	}
+
+
+/* general toolbar styles */
+
+.leaflet-bar {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.65);
+	border-radius: 4px;
+	}
+.leaflet-bar a {
+	background-color: #fff;
+	border-bottom: 1px solid #ccc;
+	width: 26px;
+	height: 26px;
+	line-height: 26px;
+	display: block;
+	text-align: center;
+	text-decoration: none;
+	color: black;
+	}
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	display: block;
+	}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+	background-color: #f4f4f4;
+	}
+.leaflet-bar a:first-child {
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+	}
+.leaflet-bar a:last-child {
+	border-bottom-left-radius: 4px;
+	border-bottom-right-radius: 4px;
+	border-bottom: none;
+	}
+.leaflet-bar a.leaflet-disabled {
+	cursor: default;
+	background-color: #f4f4f4;
+	color: #bbb;
+	}
+
+.leaflet-touch .leaflet-bar a {
+	width: 30px;
+	height: 30px;
+	line-height: 30px;
+	}
+.leaflet-touch .leaflet-bar a:first-child {
+	border-top-left-radius: 2px;
+	border-top-right-radius: 2px;
+	}
+.leaflet-touch .leaflet-bar a:last-child {
+	border-bottom-left-radius: 2px;
+	border-bottom-right-radius: 2px;
+	}
+
+/* zoom control */
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+	font: bold 18px 'Lucida Console', Monaco, monospace;
+	text-indent: 1px;
+	}
+
+.leaflet-touch .leaflet-control-zoom-in, .leaflet-touch .leaflet-control-zoom-out  {
+	font-size: 22px;
+	}
+
+
+/* layers control */
+
+.leaflet-control-layers {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+	background: #fff;
+	border-radius: 5px;
+	}
+.leaflet-control-layers-toggle {
+	width: 36px;
+	height: 36px;
+	}
+.leaflet-touch .leaflet-control-layers-toggle {
+	width: 44px;
+	height: 44px;
+	}
+.leaflet-control-layers .leaflet-control-layers-list,
+.leaflet-control-layers-expanded .leaflet-control-layers-toggle {
+	display: none;
+	}
+.leaflet-control-layers-expanded .leaflet-control-layers-list {
+	display: block;
+	position: relative;
+	}
+.leaflet-control-layers-expanded {
+	padding: 6px 10px 6px 6px;
+	color: #333;
+	background: #fff;
+	}
+.leaflet-control-layers-scrollbar {
+	overflow-y: scroll;
+	overflow-x: hidden;
+	padding-right: 5px;
+	}
+.leaflet-control-layers-selector {
+	margin-top: 2px;
+	position: relative;
+	top: 1px;
+	}
+.leaflet-control-layers label {
+	display: block;
+	font-size: 13px;
+	font-size: 1.08333em;
+	}
+.leaflet-control-layers-separator {
+	height: 0;
+	border-top: 1px solid #ddd;
+	margin: 5px -10px 5px -6px;
+	}
+
+
+/* attribution and scale controls */
+
+.leaflet-container .leaflet-control-attribution {
+	background: #fff;
+	background: rgba(255, 255, 255, 0.8);
+	margin: 0;
+	}
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+	padding: 0 5px;
+	color: #333;
+	line-height: 1.4;
+	}
+.leaflet-control-attribution a {
+	text-decoration: none;
+	}
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+	text-decoration: underline;
+	}
+.leaflet-attribution-flag {
+	display: inline !important;
+	vertical-align: baseline !important;
+	width: 1em;
+	height: 0.6669em;
+	}
+.leaflet-left .leaflet-control-scale {
+	margin-left: 5px;
+	}
+.leaflet-bottom .leaflet-control-scale {
+	margin-bottom: 5px;
+	}
+.leaflet-control-scale-line {
+	border: 2px solid #777;
+	border-top: none;
+	line-height: 1.1;
+	padding: 2px 5px 1px;
+	white-space: nowrap;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	background: rgba(255, 255, 255, 0.8);
+	text-shadow: 1px 1px #fff;
+	}
+.leaflet-control-scale-line:not(:first-child) {
+	border-top: 2px solid #777;
+	border-bottom: none;
+	margin-top: -2px;
+	}
+.leaflet-control-scale-line:not(:first-child):not(:last-child) {
+	border-bottom: 2px solid #777;
+	}
+
+.leaflet-touch .leaflet-control-attribution,
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	box-shadow: none;
+	}
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	border: 2px solid rgba(0,0,0,0.2);
+	background-clip: padding-box;
+	}
+
+
+/* popup */
+
+.leaflet-popup {
+	position: absolute;
+	text-align: center;
+	margin-bottom: 20px;
+	}
+.leaflet-popup-content-wrapper {
+	padding: 1px;
+	text-align: left;
+	border-radius: 12px;
+	}
+.leaflet-popup-content {
+	margin: 13px 24px 13px 20px;
+	line-height: 1.3;
+	font-size: 13px;
+	font-size: 1.08333em;
+	min-height: 1px;
+	}
+.leaflet-popup-content p {
+	margin: 17px 0;
+	margin: 1.3em 0;
+	}
+.leaflet-popup-tip-container {
+	width: 40px;
+	height: 20px;
+	position: absolute;
+	left: 50%;
+	margin-top: -1px;
+	margin-left: -20px;
+	overflow: hidden;
+	pointer-events: none;
+	}
+.leaflet-popup-tip {
+	width: 17px;
+	height: 17px;
+	padding: 1px;
+
+	margin: -10px auto 0;
+	pointer-events: auto;
+
+	-webkit-transform: rotate(45deg);
+	   -moz-transform: rotate(45deg);
+	    -ms-transform: rotate(45deg);
+	        transform: rotate(45deg);
+	}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+	background: white;
+	color: #333;
+	box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+	}
+.leaflet-container a.leaflet-popup-close-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	border: none;
+	text-align: center;
+	width: 24px;
+	height: 24px;
+	font: 16px/24px Tahoma, Verdana, sans-serif;
+	color: #757575;
+	text-decoration: none;
+	background: transparent;
+	}
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+	color: #585858;
+	}
+.leaflet-popup-scrolled {
+	overflow: auto;
+	}
+
+
+/* div icon */
+
+.leaflet-div-icon {
+	background: #fff;
+	border: 1px solid #666;
+	}
+
+
+/* Tooltip */
+.leaflet-tooltip {
+	position: absolute;
+	padding: 6px;
+	background-color: #fff;
+	border: 1px solid #fff;
+	border-radius: 3px;
+	color: #222;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+	}
+.leaflet-tooltip.leaflet-interactive {
+	cursor: pointer;
+	pointer-events: auto;
+	}
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	position: absolute;
+	pointer-events: none;
+	border: 6px solid transparent;
+	background: transparent;
+	content: "";
+	}
+
+/* Directions */
+
+.leaflet-tooltip-bottom {
+	margin-top: 6px;
+}
+.leaflet-tooltip-top {
+	margin-top: -6px;
+}
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-top:before {
+	left: 50%;
+	margin-left: -6px;
+	}
+.leaflet-tooltip-top:before {
+	bottom: 0;
+	margin-bottom: -12px;
+	border-top-color: #fff;
+	}
+.leaflet-tooltip-bottom:before {
+	top: 0;
+	margin-top: -12px;
+	margin-left: -6px;
+	border-bottom-color: #fff;
+	}
+.leaflet-tooltip-left {
+	margin-left: -6px;
+}
+.leaflet-tooltip-right {
+	margin-left: 6px;
+}
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	top: 50%;
+	margin-top: -6px;
+	}
+.leaflet-tooltip-left:before {
+	right: 0;
+	margin-right: -12px;
+	border-left-color: #fff;
+	}
+.leaflet-tooltip-right:before {
+	left: 0;
+	margin-left: -12px;
+	border-right-color: #fff;
+	}
+
+@media print {
+	.leaflet-control {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+		}
+	}
+`;
+
+  const _scriptPromises = {};
+  function loadScriptOnce(src) {
+    if (_scriptPromises[src]) return _scriptPromises[src];
+    _scriptPromises[src] = new Promise((resolve, reject) => {
+      if (document.querySelector(`script[data-gfm-src="${src}"]`)) {
+        resolve();
+        return;
+      }
+      const el = document.createElement("script");
+      el.src = src;
+      el.async = true;
+      el.dataset.gfmSrc = src;
+      el.onload = () => resolve();
+      el.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
+      document.head.appendChild(el);
+    });
+    return _scriptPromises[src];
+  }
+
+  async function ensureLeaflet() {
+    // La CSS de Leaflet ya no se carga por <link> aqui: se inyecta inline
+    // dentro del shadow root de cada card (ver _renderShell), porque un
+    // <link> externo no aplica de forma fiable dentro de un Shadow DOM.
+    if (!window.L) {
+      await loadScriptOnce(LEAFLET_JS);
+    }
+    if (!window.L.Symbol) {
+      try {
+        await loadScriptOnce(DECORATOR_JS);
+      } catch (e) {
+        console.warn("[googlefindmy-card-tracker] leaflet-polylinedecorator no disponible:", e);
+      }
+    }
+    return window.L;
+  }
+
+  function haversineMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toRad = (d) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function bearingDegrees(lat1, lon1, lat2, lon2) {
+    const toRad = (d) => (d * Math.PI) / 180;
+    const toDeg = (r) => (r * 180) / Math.PI;
+    const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+    const x =
+      Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+      Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  // Deteccion de "stay points": recorre los puntos en orden y agrupa
+  // corridas consecutivas que se quedan dentro de un radio (metros) del
+  // primer punto de la corrida durante al menos minMinutes. Cada corrida
+  // que califica se colapsa en un unico punto "cluster" (centroide +
+  // conteo + rango de tiempo); las corridas que no califican se dejan
+  // intactas, punto por punto. Con esto el mapa deja de llenarse de
+  // decenas/cientos de marcadores apilados cuando el dispositivo se queda
+  // mucho tiempo quieto en el mismo sitio.
+  function detectStayPoints(points, radiusMeters, minMinutes) {
+    if (!points || points.length === 0) return [];
+    const result = [];
+    let i = 0;
+    const n = points.length;
+    while (i < n) {
+      let j = i + 1;
+      while (
+        j < n &&
+        haversineMeters(points[i].lat, points[i].lon, points[j].lat, points[j].lon) <= radiusMeters
+      ) {
+        j++;
+      }
+      const runPoints = points.slice(i, j);
+      const durationMs = runPoints[runPoints.length - 1].timestamp - runPoints[0].timestamp;
+      if (runPoints.length > 1 && durationMs >= minMinutes * 60000) {
+        const avgLat = runPoints.reduce((s, p) => s + p.lat, 0) / runPoints.length;
+        const avgLon = runPoints.reduce((s, p) => s + p.lon, 0) / runPoints.length;
+        const maxAcc = runPoints.reduce((m, p) => Math.max(m, p.accuracy || 0), 0);
+        const last = runPoints[runPoints.length - 1];
+        result.push({
+          isCluster: true,
+          lat: avgLat,
+          lon: avgLon,
+          accuracy: maxAcc || null,
+          timestamp: runPoints[0].timestamp,
+          endTimestamp: last.timestamp,
+          count: runPoints.length,
+          source: last.source,
+          state: last.state,
+        });
+      } else {
+        result.push(...runPoints);
+      }
+      i = j;
+    }
+    return result;
+  }
+
+  function escapeXML(str) {
+    return String(str ?? "").replace(/[<>&'"]/g, (c) => {
+      switch (c) {
+        case "<":
+          return "&lt;";
+        case ">":
+          return "&gt;";
+        case "&":
+          return "&amp;";
+        case "'":
+          return "&apos;";
+        case '"':
+          return "&quot;";
+        default:
+          return c;
+      }
+    });
+  }
+
+  function escapeHTML(str) {
+    const div = document.createElement("div");
+    div.textContent = String(str ?? "");
+    return div.innerHTML;
+  }
+
+  function downloadFile(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function formatDuration(ms) {
+    if (!ms || ms < 0) return "0 min";
+    const totalMin = Math.round(ms / 60000);
+    const days = Math.floor(totalMin / 1440);
+    const hours = Math.floor((totalMin % 1440) / 60);
+    const min = totalMin % 60;
+    const parts = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (min || parts.length === 0) parts.push(`${min}min`);
+    return parts.join(" ");
+  }
+
+  function formatDistance(km) {
+    if (km < 1) return `${Math.round(km * 1000)} m`;
+    return `${km.toFixed(2)} km`;
+  }
+
+  function formatTime(date) {
+    if (!date) return "-";
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  // Convierte un Date a un string valido para <input type="datetime-local">
+  // en hora LOCAL del navegador (no UTC), y viceversa.
+  function toDatetimeLocalValue(date) {
+    if (!date) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`;
+  }
+
+  function buildGPX(points, name) {
+    const trkpts = points
+      .map((p) => {
+        const ext =
+          p.accuracy != null
+            ? `      <extensions><gfm:accuracy xmlns:gfm="https://github.com/davicho16/googlefindmy-card-tracker">${p.accuracy}</gfm:accuracy></extensions>\n`
+            : "";
+        return `    <trkpt lat="${p.lat}" lon="${p.lon}">\n      <time>${p.timestamp.toISOString()}</time>\n${ext}    </trkpt>`;
+      })
+      .join("\n");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="googlefindmy-card-tracker ${CARD_VERSION}" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata>\n    <name>${escapeXML(
+      name
+    )}</name>\n    <time>${new Date().toISOString()}</time>\n  </metadata>\n  <trk>\n    <name>${escapeXML(
+      name
+    )}</name>\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>\n`;
+  }
+
+  function buildKML(points, name) {
+    const coords = points.map((p) => `${p.lon},${p.lat},0`).join(" ");
+    const placemarks = points
+      .map((p, i) => {
+        const isStart = i === 0;
+        const isEnd = i === points.length - 1;
+        const label = isStart ? "Inicio" : isEnd ? "Fin" : `Punto ${i}`;
+        return `    <Placemark>\n      <name>${escapeXML(label)}</name>\n      <TimeStamp><when>${p.timestamp.toISOString()}</when></TimeStamp>\n      <description>Precisión: ${
+          p.accuracy != null ? Math.round(p.accuracy) + " m" : "N/D"
+        }</description>\n      <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>\n    </Placemark>`;
+      })
+      .join("\n");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n  <Document>\n    <name>${escapeXML(
+      name
+    )}</name>\n    <Style id="gfmLine">\n      <LineStyle><color>ff2196f3</color><width>4</width></LineStyle>\n    </Style>\n    <Placemark>\n      <name>${escapeXML(
+      name
+    )} - Recorrido</name>\n      <styleUrl>#gfmLine</styleUrl>\n      <LineString>\n        <tessellate>1</tessellate>\n        <coordinates>${coords}</coordinates>\n      </LineString>\n    </Placemark>\n${placemarks}\n  </Document>\n</kml>\n`;
+  }
+
+  function computeStats(points) {
+    if (!points || points.length === 0) {
+      return { distanceKm: 0, durationMs: 0, avgSpeed: 0, maxSpeed: 0, count: 0, start: null, end: null };
+    }
+    if (points.length === 1) {
+      return {
+        distanceKm: 0,
+        durationMs: 0,
+        avgSpeed: 0,
+        maxSpeed: 0,
+        count: 1,
+        start: points[0].timestamp,
+        end: points[0].timestamp,
+      };
+    }
+    let distance = 0;
+    let maxSpeed = 0;
+    for (let i = 1; i < points.length; i++) {
+      const d = haversineMeters(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+      distance += d;
+      const dtHours = (points[i].timestamp - points[i - 1].timestamp) / 3600000;
+      if (dtHours > 0) {
+        const speed = d / 1000 / dtHours;
+        if (speed > maxSpeed && speed < 300) maxSpeed = speed;
+      }
+    }
+    const durationMs = points[points.length - 1].timestamp - points[0].timestamp;
+    const durationHours = durationMs / 3600000;
+    const avgSpeed = durationHours > 0 ? distance / 1000 / durationHours : 0;
+    return {
+      distanceKm: distance / 1000,
+      durationMs,
+      avgSpeed,
+      maxSpeed,
+      count: points.length,
+      start: points[0].timestamp,
+      end: points[points.length - 1].timestamp,
+    };
+  }
+
+  const DEFAULT_CONFIG = {
+    title: "Find My Devices",
+    entities: [],
+    show_last_seen: true,
+    show_location_name: true,
+    enable_actions: true,
+    keep_device_list_pinned: false,
+    show_path_lines: true,
+    filter_keywords: "",
+    history_days: 3,
+    accuracy_filter: 0,
+    show_start_end_markers: true,
+    show_numbered_markers: true,
+    show_direction_arrows: true,
+    enable_playback: true,
+    show_statistics: true,
+    enable_export: true,
+    enable_geofences: true,
+    // Umbrales del agrupamiento de paradas (ajustables solo por YAML, no
+    // tienen control en el editor visual): radio en metros y minutos
+    // minimos quietos para que una corrida de puntos se colapse en un
+    // unico marcador "parada".
+    cluster_radius_meters: 40,
+    cluster_min_minutes: 15,
+  };
+
+  // Prefijo usado para identificar zonas/automatizaciones creadas por esta
+  // card (para no listar/tocar zonas u otras automatizaciones del usuario
+  // que no tengan nada que ver con esta funcionalidad).
+  const GFM_ZONE_PREFIX = "gfm_";
+  const GFM_AUTOMATION_PREFIX = "gfm_alert_";
+  const GFM_META_MARKER = "gfm_meta:";
+
+  function slugify(str) {
+    // NFD descompone letras acentuadas en letra base + marca de acento
+    // separada; el filtro [^\x00-\x7F] elimina esas marcas (y cualquier
+    // otro caracter no-ASCII, como emojis) sin depender de un rango
+    // unicode escrito literalmente en el codigo fuente.
+    const base = String(str || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[^\x00-\x7F]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 24);
+    return base || "geocerca";
+  }
+
+  function randomSuffix() {
+    return Math.random().toString(36).slice(2, 6);
+  }
+
+  class GoogleFindMyCardTracker extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+      this._config = null;
+      this._hass = null;
+      this._built = false;
+      this._map = null;
+      this._layerGroup = null;
+      this._decorator = null;
+      this._selectedEntityId = null;
+      this._points = [];
+      this._displayPoints = [];
+      this._panelState = { devices: false, filters: false, stats: false, playback: false, geofences: false };
+      this._runtimeFilters = { days: 3, accuracy: 0, customFrom: null, customTo: null, cluster: false };
+      this._playback = {
+        timer: null,
+        index: 0,
+        speed: 1,
+        playing: false,
+        marker: null,
+      };
+      this._fsListenerBound = false;
+      this._onFullscreenChangeBound = () => this._onFullscreenChange();
+
+      // Estado de la funcionalidad de geocercas.
+      this._geofences = [];
+      this._geofencesLoaded = false;
+      this._geofenceDraft = null; // null = formulario cerrado
+      this._geofenceEditingSlug = null; // slug si se esta editando una existente
+      this._geofenceStatus = ""; // texto de error/estado para el panel
+      this._geofenceBusy = false; // true mientras se guarda/borra (deshabilita botones)
+      this._geofencePlacing = false; // true mientras se espera un click en el mapa
+      this._geofencePreviewLayer = null;
+      this._geofenceMapLayerGroup = null;
+      this._geofenceMapClickHandler = null;
+    }
+
+    setConfig(config) {
+      if (!config || !Array.isArray(config.entities) || config.entities.length === 0) {
+        throw new Error("Debes definir al menos una entidad en 'entities'.");
+      }
+      this._config = { ...DEFAULT_CONFIG, ...config };
+      this._runtimeFilters.days = this._config.history_days;
+      this._runtimeFilters.accuracy = this._config.accuracy_filter;
+      if (this._built) {
+        this._renderShell();
+      }
+    }
+
+    getCardSize() {
+      return 7;
+    }
+
+    static getConfigElement() {
+      return document.createElement(EDITOR_TAG);
+    }
+
+    static getStubConfig() {
+      return { entities: [] };
+    }
+
+    set hass(hass) {
+      const first = !this._hass;
+      this._hass = hass;
+      if (!this._built) {
+        this._build();
+      }
+      this._updateDeviceList();
+      if (first && this._config.entities.length > 0) {
+        const first_entity = this._resolveEntities()[0];
+        if (first_entity) this._selectDevice(first_entity.entity, true);
+      }
+    }
+
+    get hass() {
+      return this._hass;
+    }
+
+    connectedCallback() {
+      if (this._hass && !this._built) this._build();
+    }
+
+    disconnectedCallback() {
+      this._stopPlayback();
+      if (this._resizeObserver) {
+        this._resizeObserver.disconnect();
+        this._resizeObserver = null;
+      }
+      document.removeEventListener("fullscreenchange", this._onFullscreenChangeBound);
+      this._fsListenerBound = false;
+    }
+
+    async _build() {
+      this._built = true;
+      this._renderShell();
+      try {
+        await ensureLeaflet();
+        this._initMap();
+        if (this._config.enable_geofences) {
+          // No se espera (fire-and-forget): que existan geocercas guardadas
+          // no debe retrasar el resto de la carga de la card.
+          this._loadGeofences();
+        }
+      } catch (e) {
+        console.error("[googlefindmy-card-tracker] Error cargando Leaflet:", e);
+        const mapEl = this.shadowRoot.getElementById("gfm-map");
+        if (mapEl) mapEl.innerHTML = `<div class="gfm-error">No se pudo cargar el mapa: ${escapeHTML(e.message)}</div>`;
+      }
+    }
+
+    _resolveEntities() {
+      const keywords = (this._config.filter_keywords || "")
+        .split(",")
+        .map((k) => k.trim().toLowerCase())
+        .filter(Boolean);
+
+      return this._config.entities
+        .map((e) => (typeof e === "string" ? { entity: e } : e))
+        .filter((e) => {
+          if (keywords.length === 0) return true;
+          return keywords.some((k) => e.entity.toLowerCase().includes(k));
+        });
+    }
+
+    _renderShell() {
+      const root = this.shadowRoot;
+      root.innerHTML = `
+        <style>${LEAFLET_CSS_INLINE}</style>
+        <style>${this._styles()}</style>
+        <ha-card>
+          <div class="gfm-header">
+            <div class="gfm-title">${escapeHTML(this._config.title)}</div>
+            <div class="gfm-header-actions">
+              <button id="gfm-btn-devices" class="gfm-icon-btn" title="Dispositivos">📱</button>
+              <button id="gfm-btn-filters" class="gfm-icon-btn" title="Filtros">📅</button>
+              <button id="gfm-btn-cluster" class="gfm-icon-btn" title="Agrupar paradas largas en el mapa">🧲</button>
+              ${this._config.enable_geofences ? '<button id="gfm-btn-geofences" class="gfm-icon-btn" title="Geocercas">🎯</button>' : ""}
+              ${this._config.show_statistics ? '<button id="gfm-btn-stats" class="gfm-icon-btn" title="Estadísticas">📊</button>' : ""}
+              ${this._config.enable_playback ? '<button id="gfm-btn-playback" class="gfm-icon-btn" title="Reproducir recorrido">🎞️</button>' : ""}
+              <button id="gfm-btn-refresh" class="gfm-icon-btn" title="Actualizar">🔄</button>
+              <button id="gfm-btn-fullscreen" class="gfm-icon-btn" title="Pantalla completa">⛶</button>
+            </div>
+          </div>
+          <div class="gfm-body">
+            <div id="gfm-devices" class="gfm-devices ${this._config.keep_device_list_pinned ? "gfm-pinned" : ""}"></div>
+            <div class="gfm-map-wrap">
+              <div id="gfm-map" class="gfm-map"></div>
+              <div id="gfm-empty-msg" class="gfm-empty-msg gfm-hidden">Sin datos de ubicación en el rango seleccionado.</div>
+
+              <div id="gfm-filters-panel" class="gfm-panel gfm-panel-topright">
+                <div class="gfm-panel-title">📅 Filtros</div>
+                <div class="gfm-field">
+                  <label>Rango histórico</label>
+                  <div class="gfm-btn-row">
+                    <button data-days="1" class="gfm-chip">1d</button>
+                    <button data-days="3" class="gfm-chip">3d</button>
+                    <button data-days="7" class="gfm-chip">7d</button>
+                    <button data-days="14" class="gfm-chip">14d</button>
+                    <button data-days="custom" id="gfm-chip-custom" class="gfm-chip">🗓️ Rango</button>
+                  </div>
+                </div>
+                <div id="gfm-custom-range" class="gfm-field gfm-hidden">
+                  <label>Desde</label>
+                  <input id="gfm-range-from" type="datetime-local" />
+                  <label>Hasta</label>
+                  <input id="gfm-range-to" type="datetime-local" />
+                  <div class="gfm-btn-row">
+                    <button id="gfm-apply-range" class="gfm-chip">Aplicar rango</button>
+                  </div>
+                  <div id="gfm-range-error" class="gfm-range-error"></div>
+                </div>
+                <div class="gfm-field">
+                  <label>Precisión GPS máx: <span id="gfm-accuracy-val">0 m (desactivado)</span></label>
+                  <input id="gfm-accuracy-slider" type="range" min="0" max="300" step="10" value="0" />
+                </div>
+              </div>
+
+              <div id="gfm-stats-panel" class="gfm-panel gfm-panel-topright gfm-hidden">
+                <div class="gfm-panel-title">📊 Estadísticas del recorrido</div>
+                <div id="gfm-stats-body" class="gfm-stats-body">Selecciona un dispositivo.</div>
+                ${
+                  this._config.enable_export
+                    ? `<div class="gfm-btn-row">
+                        <button id="gfm-export-gpx" class="gfm-chip">📁 GPX</button>
+                        <button id="gfm-export-kml" class="gfm-chip">📁 KML</button>
+                      </div>`
+                    : ""
+                }
+              </div>
+
+              ${
+                this._config.enable_geofences
+                  ? `<div id="gfm-geofences-panel" class="gfm-panel gfm-panel-topright gfm-panel-wide gfm-hidden">
+                <div class="gfm-panel-title">🎯 Geocercas</div>
+                <div id="gfm-geofence-status" class="gfm-geofence-status"></div>
+                <div id="gfm-geofence-list" class="gfm-geofence-list"></div>
+                <div class="gfm-btn-row">
+                  <button id="gfm-geofence-new-btn" class="gfm-chip">+ Nueva geocerca</button>
+                </div>
+                <div id="gfm-geofence-form" class="gfm-geofence-form gfm-hidden">
+                  <div class="gfm-field">
+                    <label>Nombre</label>
+                    <input id="gfm-geo-name" type="text" placeholder="Ej: Casa" />
+                  </div>
+                  <div class="gfm-field">
+                    <label>Dispositivo</label>
+                    <select id="gfm-geo-device"></select>
+                  </div>
+                  <div class="gfm-field">
+                    <label>Centro</label>
+                    <div class="gfm-btn-row">
+                      <button id="gfm-geo-pick-center" class="gfm-chip">📍 Elegir en el mapa</button>
+                    </div>
+                    <div id="gfm-geo-center-readout" class="gfm-geo-center-readout">Sin elegir</div>
+                  </div>
+                  <div class="gfm-field">
+                    <label>Radio: <span id="gfm-geo-radius-val">150 m</span></label>
+                    <input id="gfm-geo-radius" type="range" min="30" max="2000" step="10" value="150" />
+                  </div>
+                  <div class="gfm-field">
+                    <label>Notificar push a</label>
+                    <select id="gfm-geo-notify"></select>
+                  </div>
+                  <label class="gfm-geo-checkbox-row">
+                    <input id="gfm-geo-persistent" type="checkbox" checked />
+                    <span>Notificar también en el panel de Home Assistant</span>
+                  </label>
+                  <label class="gfm-geo-checkbox-row">
+                    <input id="gfm-geo-onenter" type="checkbox" />
+                    <span>También notificar al entrar (no solo al salir)</span>
+                  </label>
+                  <div id="gfm-geo-form-error" class="gfm-range-error"></div>
+                  <div class="gfm-btn-row">
+                    <button id="gfm-geo-save" class="gfm-chip">Guardar</button>
+                    <button id="gfm-geo-cancel" class="gfm-chip">Cancelar</button>
+                  </div>
+                </div>
+              </div>`
+                  : ""
+              }
+
+              <div id="gfm-playback-bar" class="gfm-panel gfm-panel-bottom gfm-hidden">
+                <div class="gfm-playback-controls">
+                  <button id="gfm-play-reset" class="gfm-icon-btn" title="Reiniciar">⏮️</button>
+                  <button id="gfm-play-toggle" class="gfm-icon-btn" title="Reproducir/Pausar">▶️</button>
+                  <input id="gfm-play-scrub" type="range" min="0" max="100" value="0" class="gfm-scrub" />
+                  <select id="gfm-play-speed" class="gfm-speed-select">
+                    <option value="1">1x</option>
+                    <option value="2">2x</option>
+                    <option value="5">5x</option>
+                    <option value="10">10x</option>
+                    <option value="25">25x</option>
+                  </select>
+                </div>
+                <div id="gfm-play-time" class="gfm-play-time">-</div>
+              </div>
+            </div>
+          </div>
+        </ha-card>
+      `;
+      this._wireEvents();
+    }
+
+    _styles() {
+      return `
+        ha-card { overflow: hidden; }
+        /* Nota: cada pseudo-clase de pantalla completa va en su PROPIA regla
+           (no combinadas con coma). Un selector con una pseudo-clase que el
+           navegador no reconoce invalida TODA la lista separada por comas en
+           CSS clasico, no solo esa parte — así que combinarlas arriesgaba a
+           que ":fullscreen" tampoco aplicara en algunos navegadores. */
+        ha-card:fullscreen {
+          display: flex; flex-direction: column; height: 100vh; width: 100vw;
+          background: var(--card-background-color, white);
+        }
+        ha-card:fullscreen .gfm-body {
+          height: auto; flex: 1 1 auto;
+        }
+        ha-card:-webkit-full-screen {
+          display: flex; flex-direction: column; height: 100vh; width: 100vw;
+          background: var(--card-background-color, white);
+        }
+        ha-card:-webkit-full-screen .gfm-body {
+          height: auto; flex: 1 1 auto;
+        }
+        .gfm-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 12px 16px; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .gfm-title { font-size: 1.2em; font-weight: 500; color: var(--primary-text-color); }
+        .gfm-header-actions { display: flex; gap: 4px; }
+        .gfm-icon-btn {
+          background: none; border: none; cursor: pointer; font-size: 1.1em;
+          padding: 6px 8px; border-radius: 8px; color: var(--primary-text-color);
+        }
+        .gfm-icon-btn:hover { background: var(--secondary-background-color, #f0f0f0); }
+        .gfm-icon-btn.gfm-active { background: var(--primary-color); color: white; }
+        .gfm-body { display: flex; position: relative; height: 480px; }
+        .gfm-devices {
+          width: 0; overflow: hidden; transition: width .2s ease; flex-shrink: 0;
+          background: var(--card-background-color); border-right: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .gfm-devices.gfm-open, .gfm-devices.gfm-pinned { width: 220px; overflow-y: auto; }
+        .gfm-device-card {
+          padding: 10px 12px; border-bottom: 1px solid var(--divider-color, #eee);
+          cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+        }
+        .gfm-device-card:hover { background: var(--secondary-background-color, #f5f5f5); }
+        .gfm-device-card.gfm-active { background: var(--primary-color); color: white; }
+        .gfm-device-name { font-weight: 500; font-size: 0.95em; display:flex; align-items:center; gap:6px; }
+        .gfm-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .gfm-status-home { background: #4caf50; }
+        .gfm-status-away { background: #2196f3; }
+        .gfm-status-unknown { background: #9e9e9e; }
+        .gfm-device-sub { font-size: 0.78em; opacity: 0.8; }
+        .gfm-map-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; }
+        .gfm-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+        .gfm-error { padding: 24px; text-align: center; color: var(--error-color, #c00); }
+        .gfm-empty-msg {
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          z-index: 400; background: var(--card-background-color, white);
+          border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+          padding: 10px 16px; font-size: 0.85em; color: var(--primary-text-color);
+          text-align: center; max-width: 240px; pointer-events: none;
+        }
+        .gfm-panel {
+          position: absolute; background: var(--card-background-color, white);
+          border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+          padding: 10px 12px; z-index: 500; font-size: 0.85em; max-width: 240px;
+        }
+        .gfm-panel-topright { top: 10px; right: 10px; }
+        .gfm-panel-bottom { left: 10px; right: 10px; bottom: 10px; max-width: none; }
+        .gfm-panel-wide { max-width: 290px; max-height: 420px; overflow-y: auto; }
+        .gfm-hidden { display: none; }
+        .gfm-panel-title { font-weight: 600; margin-bottom: 6px; }
+        .gfm-field { margin-top: 8px; }
+        .gfm-field label { display: block; font-size: 0.85em; margin-bottom: 4px; opacity: 0.85; }
+        .gfm-field input[type=datetime-local],
+        .gfm-field input[type=text],
+        .gfm-field select {
+          width: 100%; box-sizing: border-box; padding: 4px 6px; border-radius: 6px;
+          border: 1px solid var(--divider-color, #ccc); font-family: inherit; margin-bottom: 6px;
+          background: var(--card-background-color, white); color: var(--primary-text-color);
+        }
+        .gfm-field input[type=range] { width: 100%; }
+        .gfm-range-error { font-size: 0.75em; color: var(--error-color, #c00); margin-top: 4px; min-height: 1em; }
+        .gfm-geofence-status { font-size: 0.78em; color: var(--error-color, #c00); margin-bottom: 4px; }
+        .gfm-geofence-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+        .gfm-geofence-item {
+          border: 1px solid var(--divider-color, #ccc); border-radius: 8px; padding: 6px 8px;
+        }
+        .gfm-geofence-item-name { font-weight: 600; font-size: 0.85em; }
+        .gfm-geofence-item-sub { font-size: 0.75em; opacity: 0.8; margin-top: 2px; }
+        .gfm-geofence-item-actions { display: flex; gap: 6px; margin-top: 4px; }
+        .gfm-geofence-item-actions button {
+          border: none; background: transparent; cursor: pointer; font-size: 0.85em;
+          padding: 2px 4px; border-radius: 4px; color: var(--primary-text-color);
+        }
+        .gfm-geofence-item-actions button:hover { background: var(--secondary-background-color, #f0f0f0); }
+        .gfm-geofence-empty { font-size: 0.8em; opacity: 0.75; }
+        .gfm-geo-checkbox-row {
+          display: flex; align-items: flex-start; gap: 6px; margin-top: 8px;
+          font-size: 0.8em; cursor: pointer;
+        }
+        .gfm-geo-center-readout { font-size: 0.78em; opacity: 0.85; margin-top: 4px; }
+        .gfm-btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+        .gfm-chip {
+          border: 1px solid var(--divider-color, #ccc); background: transparent;
+          border-radius: 14px; padding: 4px 10px; font-size: 0.8em; cursor: pointer;
+          color: var(--primary-text-color);
+        }
+        .gfm-chip.gfm-active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .gfm-stats-body table { border-collapse: collapse; width: 100%; }
+        .gfm-stats-body td { padding: 2px 4px; font-size: 0.85em; }
+        .gfm-stats-body td:first-child { opacity: 0.75; }
+        .gfm-stats-body td:last-child { text-align: right; font-weight: 600; }
+        .gfm-playback-controls { display: flex; align-items: center; gap: 8px; }
+        .gfm-scrub { flex: 1; }
+        .gfm-speed-select { border-radius: 6px; }
+        .gfm-play-time { font-size: 0.78em; margin-top: 4px; text-align: center; opacity: 0.85; }
+        .gfm-marker-start, .gfm-marker-end {
+          font-size: 20px; line-height: 20px; text-align: center;
+          filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
+        }
+        .gfm-marker-numbered {
+          background: var(--primary-color, #2196f3); color: white; border-radius: 50%;
+          width: 22px; height: 22px; line-height: 22px; text-align: center;
+          font-size: 11px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+        }
+        .gfm-marker-cluster {
+          background: #ff9800; color: white; border-radius: 50%;
+          width: 26px; height: 26px; line-height: 26px; text-align: center;
+          font-size: 12px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.5);
+          border: 2px solid white;
+        }
+        .gfm-marker-playback {
+          font-size: 22px; line-height: 22px; text-align: center;
+          filter: drop-shadow(0 1px 3px rgba(0,0,0,.6));
+        }
+        .gfm-marker-geofence-center {
+          font-size: 20px; line-height: 20px; text-align: center;
+          filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
+        }
+        .gfm-geofence-form {
+          margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--divider-color, #eee);
+        }
+        @media (max-width: 768px) {
+          .gfm-devices.gfm-open, .gfm-devices.gfm-pinned { width: 170px; }
+          .gfm-panel { max-width: 190px; font-size: 0.8em; }
+        }
+      `;
+    }
+
+    _wireEvents() {
+      const $ = (id) => this.shadowRoot.getElementById(id);
+
+      $("gfm-btn-devices").addEventListener("click", () => this._togglePanel("devices"));
+      $("gfm-btn-filters").addEventListener("click", () => this._togglePanel("filters"));
+      $("gfm-btn-refresh").addEventListener("click", () => {
+        if (this._selectedEntityId) this._selectDevice(this._selectedEntityId, false);
+      });
+
+      const fsBtn = $("gfm-btn-fullscreen");
+      if (fsBtn) fsBtn.addEventListener("click", () => this._toggleFullscreen());
+      if (!this._fsListenerBound) {
+        this._fsListenerBound = true;
+        this.shadowRoot.addEventListener("fullscreenchange", this._onFullscreenChangeBound);
+        document.addEventListener("fullscreenchange", this._onFullscreenChangeBound);
+      }
+
+      const statsBtn = $("gfm-btn-stats");
+      if (statsBtn) statsBtn.addEventListener("click", () => this._togglePanel("stats"));
+      const playBtn = $("gfm-btn-playback");
+      if (playBtn) playBtn.addEventListener("click", () => this._togglePanel("playback"));
+
+      const clusterBtn = $("gfm-btn-cluster");
+      if (clusterBtn) {
+        clusterBtn.classList.toggle("gfm-active", this._runtimeFilters.cluster);
+        clusterBtn.addEventListener("click", () => {
+          this._runtimeFilters.cluster = !this._runtimeFilters.cluster;
+          clusterBtn.classList.toggle("gfm-active", this._runtimeFilters.cluster);
+          this._redraw(true);
+        });
+      }
+
+      const geoBtn = $("gfm-btn-geofences");
+      if (geoBtn) geoBtn.addEventListener("click", () => this._togglePanel("geofences"));
+
+      const geoNewBtn = $("gfm-geofence-new-btn");
+      if (geoNewBtn) geoNewBtn.addEventListener("click", () => this._openGeofenceForm(null));
+
+      const geoPickBtn = $("gfm-geo-pick-center");
+      if (geoPickBtn) geoPickBtn.addEventListener("click", () => this._armGeofencePlacement());
+
+      const geoRadius = $("gfm-geo-radius");
+      if (geoRadius) {
+        geoRadius.addEventListener("input", () => {
+          if (!this._geofenceDraft) return;
+          this._geofenceDraft.radius = parseInt(geoRadius.value, 10);
+          const label = $("gfm-geo-radius-val");
+          if (label) label.textContent = `${this._geofenceDraft.radius} m`;
+          this._drawGeofencePreview();
+        });
+      }
+
+      const geoSaveBtn = $("gfm-geo-save");
+      if (geoSaveBtn) geoSaveBtn.addEventListener("click", () => this._saveGeofenceForm());
+      const geoCancelBtn = $("gfm-geo-cancel");
+      if (geoCancelBtn) geoCancelBtn.addEventListener("click", () => this._closeGeofenceForm());
+
+      this.shadowRoot.querySelectorAll("[data-days]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (btn.dataset.days === "custom") {
+            const block = $("gfm-custom-range");
+            if (block) block.classList.toggle("gfm-hidden");
+            return;
+          }
+          this._runtimeFilters.days = parseInt(btn.dataset.days, 10);
+          this._runtimeFilters.customFrom = null;
+          this._runtimeFilters.customTo = null;
+          const block = $("gfm-custom-range");
+          if (block) block.classList.add("gfm-hidden");
+          this._refreshDaysChips();
+          if (this._selectedEntityId) this._selectDevice(this._selectedEntityId, false);
+        });
+      });
+      this._refreshDaysChips();
+
+      const rangeFrom = $("gfm-range-from");
+      const rangeTo = $("gfm-range-to");
+      if (rangeFrom && this._runtimeFilters.customFrom) rangeFrom.value = toDatetimeLocalValue(this._runtimeFilters.customFrom);
+      if (rangeTo && this._runtimeFilters.customTo) rangeTo.value = toDatetimeLocalValue(this._runtimeFilters.customTo);
+
+      const applyRangeBtn = $("gfm-apply-range");
+      if (applyRangeBtn) {
+        applyRangeBtn.addEventListener("click", () => {
+          const errEl = $("gfm-range-error");
+          const fromVal = $("gfm-range-from").value;
+          const toVal = $("gfm-range-to").value;
+          if (!fromVal || !toVal) {
+            if (errEl) errEl.textContent = "Selecciona fecha/hora de inicio y fin.";
+            return;
+          }
+          const from = new Date(fromVal);
+          const to = new Date(toVal);
+          if (isNaN(from.getTime()) || isNaN(to.getTime()) || from >= to) {
+            if (errEl) errEl.textContent = "El inicio debe ser anterior al fin.";
+            return;
+          }
+          if (errEl) errEl.textContent = "";
+          this._runtimeFilters.customFrom = from;
+          this._runtimeFilters.customTo = to;
+          this._refreshDaysChips();
+          if (this._selectedEntityId) this._selectDevice(this._selectedEntityId, false);
+        });
+      }
+
+      const accSlider = $("gfm-accuracy-slider");
+      if (accSlider) {
+        accSlider.value = this._runtimeFilters.accuracy;
+        this._refreshAccuracyLabel();
+        accSlider.addEventListener("input", () => {
+          this._runtimeFilters.accuracy = parseInt(accSlider.value, 10);
+          this._refreshAccuracyLabel();
+          this._redraw();
+        });
+      }
+
+      const exportGpx = $("gfm-export-gpx");
+      if (exportGpx) exportGpx.addEventListener("click", () => this._doExport("gpx"));
+      const exportKml = $("gfm-export-kml");
+      if (exportKml) exportKml.addEventListener("click", () => this._doExport("kml"));
+
+      const playToggle = $("gfm-play-toggle");
+      if (playToggle) playToggle.addEventListener("click", () => this._togglePlayback());
+      const playReset = $("gfm-play-reset");
+      if (playReset) playReset.addEventListener("click", () => this._resetPlayback());
+      const scrub = $("gfm-play-scrub");
+      if (scrub) {
+        scrub.addEventListener("input", () => {
+          this._stopPlayback(false);
+          const idx = Math.round((scrub.value / 100) * (this._points.length - 1));
+          this._playback.index = Math.max(0, idx);
+          this._updatePlaybackMarker();
+        });
+      }
+      const speedSel = $("gfm-play-speed");
+      if (speedSel) {
+        speedSel.addEventListener("change", () => {
+          this._playback.speed = parseFloat(speedSel.value);
+          if (this._playback.playing) {
+            this._stopPlayback(false);
+            this._startPlayback();
+          }
+        });
+      }
+    }
+
+    _refreshDaysChips() {
+      const isCustom = !!(this._runtimeFilters.customFrom && this._runtimeFilters.customTo);
+      this.shadowRoot.querySelectorAll("[data-days]").forEach((btn) => {
+        if (btn.dataset.days === "custom") {
+          btn.classList.toggle("gfm-active", isCustom);
+        } else {
+          btn.classList.toggle(
+            "gfm-active",
+            !isCustom && parseInt(btn.dataset.days, 10) === this._runtimeFilters.days
+          );
+        }
+      });
+    }
+
+    _refreshAccuracyLabel() {
+      const label = this.shadowRoot.getElementById("gfm-accuracy-val");
+      if (!label) return;
+      label.textContent =
+        this._runtimeFilters.accuracy === 0 ? "0 m (desactivado)" : `${this._runtimeFilters.accuracy} m`;
+    }
+
+    _togglePanel(name) {
+      const map = {
+        devices: "gfm-devices",
+        filters: "gfm-filters-panel",
+        stats: "gfm-stats-panel",
+        playback: "gfm-playback-bar",
+        geofences: "gfm-geofences-panel",
+      };
+      this._panelState[name] = !this._panelState[name];
+      const el = this.shadowRoot.getElementById(map[name]);
+      if (!el) return;
+      if (name === "devices") {
+        el.classList.toggle("gfm-open", this._panelState.devices || this._config.keep_device_list_pinned);
+      } else {
+        el.classList.toggle("gfm-hidden", !this._panelState[name]);
+      }
+      if (name === "geofences" && this._panelState.geofences && !this._geofencesLoaded) {
+        this._loadGeofences();
+      }
+    }
+
+    _toggleFullscreen() {
+      const cardEl = this.shadowRoot.querySelector("ha-card");
+      if (!cardEl) return;
+      const isFs = this.shadowRoot.fullscreenElement === cardEl || document.fullscreenElement === this;
+      if (!isFs) {
+        const req =
+          cardEl.requestFullscreen || cardEl.webkitRequestFullscreen || cardEl.mozRequestFullScreen;
+        if (!req) {
+          console.warn("[googlefindmy-card-tracker] Este navegador no soporta la API de pantalla completa.");
+          return;
+        }
+        const result = req.call(cardEl);
+        if (result && result.catch) {
+          result.catch((e) =>
+            console.warn("[googlefindmy-card-tracker] No se pudo entrar en pantalla completa:", e)
+          );
+        }
+      } else {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+        if (exit) exit.call(document);
+      }
+    }
+
+    _onFullscreenChange() {
+      const cardEl = this.shadowRoot.querySelector("ha-card");
+      const isFs = !!cardEl && this.shadowRoot.fullscreenElement === cardEl;
+      const btn = this.shadowRoot.getElementById("gfm-btn-fullscreen");
+      if (btn) {
+        btn.classList.toggle("gfm-active", isFs);
+        btn.title = isFs ? "Salir de pantalla completa" : "Pantalla completa";
+      }
+      // Leaflet necesita recalcular su tamaño despues de que el navegador
+      // termine de aplicar el nuevo layout de pantalla completa.
+      setTimeout(() => {
+        if (!this._map || !window.L) return;
+        this._map.invalidateSize({ animate: false });
+        if (this._points && this._points.length > 0) {
+          try {
+            const bounds = window.L.latLngBounds(this._points.map((p) => [p.lat, p.lon]));
+            this._map.fitBounds(bounds.pad(0.2), { animate: false });
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      }, 200);
+    }
+
+    _initMap() {
+      const L = window.L;
+      const mapEl = this.shadowRoot.getElementById("gfm-map");
+      this._map = L.map(mapEl, { zoomControl: true }).setView([0, 0], 2);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(this._map);
+      this._layerGroup = L.layerGroup().addTo(this._map);
+
+      const kickResize = () => {
+        if (!this._map) return;
+        this._map.invalidateSize({ animate: false, pan: false });
+        if (this._points && this._points.length > 0) {
+          try {
+            const bounds = L.latLngBounds(this._points.map((p) => [p.lat, p.lon]));
+            this._map.fitBounds(bounds.pad(0.2), { animate: false });
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      };
+      if (window.ResizeObserver) {
+        this._resizeObserver = new ResizeObserver(() => kickResize());
+        this._resizeObserver.observe(mapEl);
+      }
+      [0, 200, 500, 1200].forEach((ms) => setTimeout(() => this._map && this._map.invalidateSize(), ms));
+    }
+
+    _updateDeviceList() {
+      const container = this.shadowRoot.getElementById("gfm-devices");
+      if (!container) return;
+      const entities = this._resolveEntities();
+      container.innerHTML = "";
+      if (this._config.keep_device_list_pinned) container.classList.add("gfm-pinned");
+
+      entities.forEach((cfgEntity) => {
+        const state = this._hass.states[cfgEntity.entity];
+        const card = document.createElement("div");
+        card.className = "gfm-device-card" + (cfgEntity.entity === this._selectedEntityId ? " gfm-active" : "");
+        const name = cfgEntity.name || (state ? state.attributes.friendly_name : cfgEntity.entity);
+        const statusClass = !state
+          ? "gfm-status-unknown"
+          : state.state === "home"
+          ? "gfm-status-home"
+          : state.state === "not_home"
+          ? "gfm-status-away"
+          : "gfm-status-unknown";
+        const lastSeen =
+          this._config.show_last_seen && state ? formatTime(new Date(state.last_updated)) : "";
+        const locName =
+          this._config.show_location_name && state && state.attributes.address
+            ? state.attributes.address
+            : "";
+        card.innerHTML = `
+          <div class="gfm-device-name"><span class="gfm-status-dot ${statusClass}"></span>${escapeHTML(name)}</div>
+          ${lastSeen ? `<div class="gfm-device-sub">🕒 ${escapeHTML(lastSeen)}</div>` : ""}
+          ${locName ? `<div class="gfm-device-sub">📍 ${escapeHTML(locName)}</div>` : ""}
+        `;
+        card.addEventListener("click", () => this._selectDevice(cfgEntity.entity, false));
+        container.appendChild(card);
+      });
+    }
+
+    async _selectDevice(entityId, keepView) {
+      this._selectedEntityId = entityId;
+      this._stopPlayback();
+      this._updateDeviceList();
+      await this._loadHistoryAndDraw(entityId, keepView);
+    }
+
+    async _fetchHistory(entityId, range) {
+      const isRelative = range.days != null;
+      let start, end;
+      if (isRelative) {
+        end = new Date();
+        start = new Date(end.getTime() - range.days * 86400000);
+      } else {
+        start = range.from;
+        end = range.to;
+      }
+      // IMPORTANTE: en la API de historial de HA, "no_attributes" y
+      // "minimal_response" son flags que se activan por su SOLA PRESENCIA en
+      // la query string — el valor que se les ponga (incluido "false" o "0")
+      // no importa, ¡"no_attributes=false" activa no_attributes igual que
+      // "no_attributes=true"! (ver homeassistant/components/history/__init__.py:
+      // `no_attributes = "no_attributes" in request.query`). Por eso estas dos
+      // claves NO deben incluirse en absoluto: su sola presencia hace que HA
+      // devuelva las entradas sin atributos (sin lat/lon), y el filtro de abajo
+      // las descarta todas, dejando solo 1 punto de respaldo.
+      // "significant_changes_only" si se interpreta por VALOR (`!= "0"`), asi
+      // que "=0" si sirve para desactivar el filtro de "solo cambios de
+      // estado" que de otro modo oculta casi todas las actualizaciones de
+      // GPS de un device_tracker cuyo estado (home/not_home) no cambia.
+      const path = `history/period/${start.toISOString()}?filter_entity_id=${encodeURIComponent(
+        entityId
+      )}&end_time=${encodeURIComponent(end.toISOString())}&significant_changes_only=0`;
+      let result;
+      try {
+        result = await this._hass.callApi("GET", path);
+      } catch (e) {
+        console.error("[googlefindmy-card-tracker] Error obteniendo historial:", e);
+        return [];
+      }
+      const raw = (result && result[0]) || [];
+      const points = raw
+        .filter((s) => s.attributes && s.attributes.latitude != null && s.attributes.longitude != null)
+        .map((s) => ({
+          lat: s.attributes.latitude,
+          lon: s.attributes.longitude,
+          accuracy: s.attributes.gps_accuracy ?? s.attributes.accuracy ?? null,
+          timestamp: new Date(s.last_updated || s.last_changed),
+          source: s.attributes.address || s.attributes.location_name || "",
+          state: s.state,
+        }))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      const deduped = [];
+      for (const p of points) {
+        const prev = deduped[deduped.length - 1];
+        if (!prev || prev.lat !== p.lat || prev.lon !== p.lon) deduped.push(p);
+      }
+
+      // Fallback: si no vino ningun punto de la API de historial, pero el
+      // estado EN VIVO de la entidad cae dentro del rango pedido (start..end
+      // — esto aplica tanto a los chips relativos "1d/3d/..." como a un
+      // rango personalizado que incluya el momento actual), sintetiza un
+      // punto desde ese estado en vivo para que el mapa no quede vacio.
+      // Si el rango personalizado es enteramente pasado (no incluye el
+      // presente), no se sintetiza nada: mostrar un mapa vacio ahi es
+      // correcto, porque de verdad no hay datos en esa ventana.
+      if (deduped.length === 0) {
+        const state = this._hass.states[entityId];
+        if (state && state.attributes.latitude != null && state.attributes.longitude != null) {
+          const liveTs = new Date(state.last_updated);
+          if (liveTs >= start && liveTs <= end) {
+            deduped.push({
+              lat: state.attributes.latitude,
+              lon: state.attributes.longitude,
+              accuracy: state.attributes.gps_accuracy ?? state.attributes.accuracy ?? null,
+              timestamp: liveTs,
+              source: state.attributes.address || state.attributes.location_name || "",
+              state: state.state,
+            });
+          }
+        }
+      }
+      return deduped;
+    }
+
+    async _loadHistoryAndDraw(entityId, keepView) {
+      const rf = this._runtimeFilters;
+      const range = rf.customFrom && rf.customTo ? { from: rf.customFrom, to: rf.customTo } : { days: rf.days };
+      const raw = await this._fetchHistory(entityId, range);
+      this._allPoints = raw;
+      this._redraw(keepView);
+    }
+
+    _filteredPoints() {
+      const acc = this._runtimeFilters.accuracy;
+      let pts = this._allPoints || [];
+      if (acc > 0) {
+        pts = pts.filter((p) => p.accuracy == null || p.accuracy <= acc);
+      }
+      return pts;
+    }
+
+    _computeDisplayPoints() {
+      if (!this._runtimeFilters.cluster) return this._points;
+      const radius = this._config.cluster_radius_meters || 40;
+      const minMinutes = this._config.cluster_min_minutes || 15;
+      return detectStayPoints(this._points, radius, minMinutes);
+    }
+
+    _redraw(keepView) {
+      this._points = this._filteredPoints();
+      this._displayPoints = this._computeDisplayPoints();
+      if (this._map) this._map.invalidateSize({ animate: false });
+      this._drawMap(keepView);
+      this._updateStats();
+      this._resetPlayback();
+    }
+
+    _drawMap(keepView) {
+      if (!this._map || !window.L) return;
+      const L = window.L;
+      this._layerGroup.clearLayers();
+      this._decorator = null;
+
+      const points = this._displayPoints && this._displayPoints.length ? this._displayPoints : this._points;
+      const emptyMsg = this.shadowRoot.getElementById("gfm-empty-msg");
+      if (points.length === 0) {
+        if (emptyMsg) emptyMsg.classList.remove("gfm-hidden");
+        return;
+      }
+      if (emptyMsg) emptyMsg.classList.add("gfm-hidden");
+
+      const latlngs = points.map((p) => [p.lat, p.lon]);
+
+      if (this._config.show_path_lines && points.length > 1) {
+        const line = L.polyline(latlngs, { color: "#2196f3", weight: 4, opacity: 0.8 });
+        line.addTo(this._layerGroup);
+
+        if (this._config.show_direction_arrows && L.polylineDecorator) {
+          try {
+            this._decorator = L.polylineDecorator(line, {
+              patterns: [
+                {
+                  offset: "8%",
+                  repeat: "12%",
+                  symbol: L.Symbol.arrowHead({
+                    pixelSize: 10,
+                    polygon: false,
+                    pathOptions: { stroke: true, color: "#0d47a1", weight: 2 },
+                  }),
+                },
+              ],
+            });
+            this._decorator.addTo(this._layerGroup);
+          } catch (e) {
+            console.warn("[googlefindmy-card-tracker] No se pudieron dibujar las flechas:", e);
+          }
+        }
+      }
+
+      points.forEach((p, idx) => {
+        if (p.accuracy) {
+          L.circle([p.lat, p.lon], {
+            radius: p.accuracy,
+            color: p.isCluster ? "#ff9800" : "#2196f3",
+            weight: 1,
+            fillOpacity: 0.06,
+            opacity: 0.25,
+          }).addTo(this._layerGroup);
+        }
+
+        const isStart = idx === 0;
+        const isEnd = idx === points.length - 1;
+        let icon = null;
+
+        if (isStart && isEnd) {
+          icon = L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-end">🔴</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 22],
+          });
+        } else if (isStart && this._config.show_start_end_markers) {
+          icon = L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-start">🏁</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 22],
+          });
+        } else if (isEnd && this._config.show_start_end_markers) {
+          icon = L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-end">🔴</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 22],
+          });
+        } else if (p.isCluster) {
+          icon = L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-cluster">${p.count}</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+          });
+        } else if (this._config.show_numbered_markers) {
+          icon = L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-numbered">${idx}</div>`,
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+          });
+        } else {
+          icon = L.divIcon({
+            className: "",
+            html: `<div style="background:#64b5f6;width:10px;height:10px;border-radius:50%;border:2px solid white;box-shadow:0 1px 2px rgba(0,0,0,.4);"></div>`,
+            iconSize: [10, 10],
+            iconAnchor: [5, 5],
+          });
+        }
+
+        const marker = L.marker([p.lat, p.lon], { icon }).addTo(this._layerGroup);
+        let label;
+        if (isStart && isEnd) label = "🔴 Fin / Actual";
+        else if (isStart) label = "🏁 Inicio";
+        else if (isEnd) label = "🔴 Fin / Actual";
+        else if (p.isCluster) label = `📍 Parada (${p.count} lecturas)`;
+        else label = `Punto ${idx}`;
+
+        const timeLine = p.isCluster
+          ? `Desde: ${escapeHTML(formatTime(p.timestamp))}<br/>Hasta: ${escapeHTML(
+              formatTime(p.endTimestamp)
+            )}<br/>Duración: ${escapeHTML(formatDuration(p.endTimestamp - p.timestamp))}<br/>`
+          : `Hora: ${escapeHTML(formatTime(p.timestamp))}<br/>`;
+
+        marker.bindPopup(`
+          <b>${escapeHTML(label)}</b><br/>
+          Lat/Lon: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}<br/>
+          Precisión: ${p.accuracy != null ? Math.round(p.accuracy) + " m" : "N/D"}<br/>
+          ${timeLine}
+          ${p.source ? `Ubicación: ${escapeHTML(p.source)}` : ""}
+        `);
+      });
+
+      if (this._map) this._map.invalidateSize({ animate: false });
+
+      if (!keepView) {
+        try {
+          const bounds = L.latLngBounds(latlngs);
+          this._map.fitBounds(bounds.pad(0.2), { animate: false });
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      setTimeout(() => {
+        if (!this._map) return;
+        this._map.invalidateSize({ animate: false });
+        if (!keepView) {
+          try {
+            const bounds = L.latLngBounds(latlngs);
+            this._map.fitBounds(bounds.pad(0.2), { animate: false });
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      }, 150);
+    }
+
+    _updateStats() {
+      const body = this.shadowRoot.getElementById("gfm-stats-body");
+      if (!body) return;
+      const stats = computeStats(this._points);
+      this._lastStats = stats;
+      if (stats.count === 0) {
+        body.innerHTML = "Sin datos de ubicación en el rango seleccionado.";
+        return;
+      }
+      body.innerHTML = `
+        <table>
+          <tr><td>Puntos</td><td>${stats.count}</td></tr>
+          <tr><td>Distancia</td><td>${formatDistance(stats.distanceKm)}</td></tr>
+          <tr><td>Duración</td><td>${formatDuration(stats.durationMs)}</td></tr>
+          <tr><td>Vel. media</td><td>${stats.avgSpeed.toFixed(1)} km/h</td></tr>
+          <tr><td>Vel. máxima</td><td>${stats.maxSpeed.toFixed(1)} km/h</td></tr>
+          <tr><td>Desde</td><td>${formatTime(stats.start)}</td></tr>
+          <tr><td>Hasta</td><td>${formatTime(stats.end)}</td></tr>
+        </table>
+      `;
+    }
+
+    _doExport(type) {
+      if (!this._points || this._points.length === 0) return;
+      const entityState = this._hass.states[this._selectedEntityId];
+      const name = entityState ? entityState.attributes.friendly_name : this._selectedEntityId;
+      const safeName = name.replace(/[^a-z0-9_-]+/gi, "_");
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (type === "gpx") {
+        downloadFile(`${safeName}_${stamp}.gpx`, buildGPX(this._points, name), "application/gpx+xml");
+      } else {
+        downloadFile(`${safeName}_${stamp}.kml`, buildKML(this._points, name), "application/vnd.google-earth.kml+xml");
+      }
+    }
+
+    _togglePlayback() {
+      if (this._playback.playing) {
+        this._stopPlayback();
+      } else {
+        this._startPlayback();
+      }
+    }
+
+    _startPlayback() {
+      if (!this._points || this._points.length < 2 || !window.L) return;
+      this._playback.playing = true;
+      const btn = this.shadowRoot.getElementById("gfm-play-toggle");
+      if (btn) btn.textContent = "⏸️";
+      const baseInterval = 900;
+      const tick = () => {
+        if (this._playback.index >= this._points.length - 1) {
+          this._stopPlayback();
+          return;
+        }
+        this._playback.index += 1;
+        this._updatePlaybackMarker();
+      };
+      const interval = Math.max(60, baseInterval / this._playback.speed);
+      this._playback.timer = setInterval(tick, interval);
+    }
+
+    _stopPlayback(resetIcon = true) {
+      if (this._playback.timer) {
+        clearInterval(this._playback.timer);
+        this._playback.timer = null;
+      }
+      this._playback.playing = false;
+      if (resetIcon) {
+        const btn = this.shadowRoot.getElementById("gfm-play-toggle");
+        if (btn) btn.textContent = "▶️";
+      }
+    }
+
+    _resetPlayback() {
+      this._stopPlayback();
+      this._playback.index = 0;
+      if (this._playback.marker && this._layerGroup) {
+        this._layerGroup.removeLayer(this._playback.marker);
+        this._playback.marker = null;
+      }
+      const scrub = this.shadowRoot.getElementById("gfm-play-scrub");
+      if (scrub) scrub.value = 0;
+      const timeLabel = this.shadowRoot.getElementById("gfm-play-time");
+      if (timeLabel) timeLabel.textContent = this._points.length ? formatTime(this._points[0].timestamp) : "-";
+    }
+
+    _updatePlaybackMarker() {
+      const L = window.L;
+      if (!L || !this._layerGroup || this._points.length === 0) return;
+      const idx = this._playback.index;
+      const p = this._points[idx];
+      if (!p) return;
+
+      let angle = 0;
+      if (idx > 0) {
+        const prev = this._points[idx - 1];
+        angle = bearingDegrees(prev.lat, prev.lon, p.lat, p.lon);
+      }
+
+      if (!this._playback.marker) {
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="gfm-marker-playback" style="transform: rotate(${angle}deg);">➤</div>`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        });
+        this._playback.marker = L.marker([p.lat, p.lon], { icon, zIndexOffset: 1000 }).addTo(this._layerGroup);
+      } else {
+        this._playback.marker.setLatLng([p.lat, p.lon]);
+        const el = this._playback.marker.getElement();
+        if (el) {
+          const inner = el.querySelector(".gfm-marker-playback");
+          if (inner) inner.style.transform = `rotate(${angle}deg)`;
+        }
+      }
+
+      const scrub = this.shadowRoot.getElementById("gfm-play-scrub");
+      if (scrub) scrub.value = Math.round((idx / (this._points.length - 1)) * 100);
+      const timeLabel = this.shadowRoot.getElementById("gfm-play-time");
+      if (timeLabel) timeLabel.textContent = formatTime(p.timestamp);
+
+      if (this._map) this._map.panTo([p.lat, p.lon], { animate: true, duration: 0.3 });
+    }
+
+    // ---------------------------------------------------------------------
+    // Geocercas: cada geocerca se guarda como una zona real de HA
+    // (zone.gfm_<slug>) mas una automatizacion real (automation.gfm_alert_<slug>)
+    // con un trigger de zona (salida, y opcionalmente entrada) que llama a
+    // notify.* y/o persistent_notification.create. Al ser entidades reales
+    // del lado del servidor, las alertas funcionan aunque nadie tenga esta
+    // card abierta en el navegador.
+    // ---------------------------------------------------------------------
+
+    _isPermissionError(e) {
+      // La forma exacta del error que tira hass.callApi() en un rechazo no
+      // esta 100% garantizada entre versiones de HA, asi que se chequea de
+      // varias formas en vez de confiar en una sola propiedad.
+      if (!e) return false;
+      const status = e.status_code || e.status || (e.body && e.body.status_code);
+      if (status === 401 || status === 403) return true;
+      const msg = this._formatApiError(e).toLowerCase();
+      return msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") || msg.includes("forbidden");
+    }
+
+    _formatApiError(e) {
+      // hass.callApi() puede rechazar con formas muy distintas segun la
+      // version de HA y el tipo de error (un Error de JS, un objeto de
+      // respuesta {status, status_text, body}, el body ya parseado con
+      // {message: "..."} o {error: "..."}, etc.). Probamos varias antes de
+      // caer a JSON.stringify (que al menos muestra el contenido real, en
+      // vez de "[object Object]" que da la interpolacion directa de un
+      // objeto en un template string).
+      if (!e) return "error desconocido";
+      if (typeof e === "string") return e;
+      if (e instanceof Error && e.message) return e.message;
+      const body = (e && e.body) || e;
+      if (body && typeof body === "object") {
+        if (typeof body.message === "string" && body.message) return body.message;
+        if (typeof body.error === "string" && body.error) return body.error;
+      }
+      if (e.message) return e.message;
+      const status = e.status || e.status_code;
+      if (status) {
+        return `HTTP ${status}${e.statusText ? " " + e.statusText : ""}`;
+      }
+      try {
+        const json = JSON.stringify(e);
+        if (json && json !== "{}") return json;
+      } catch (jsonErr) {
+        /* sigue al fallback de abajo */
+      }
+      return String(e);
+    }
+
+    _getMobileNotifyTargets() {
+      const targets = [];
+      const notifyServices = (this._hass.services && this._hass.services.notify) || {};
+      Object.keys(notifyServices)
+        .filter((key) => key.startsWith("mobile_app_"))
+        .forEach((key) => {
+          targets.push({
+            value: `notify.${key}`,
+            label: key.replace(/^mobile_app_/, "").replace(/_/g, " "),
+          });
+        });
+      Object.keys(this._hass.states)
+        .filter((eid) => eid.startsWith("notify.") && eid.includes("mobile_app"))
+        .forEach((eid) => {
+          if (targets.some((t) => t.value === eid)) return;
+          const st = this._hass.states[eid];
+          targets.push({ value: eid, label: (st && st.attributes.friendly_name) || eid });
+        });
+      return targets;
+    }
+
+    _notifyServiceCallFor(target) {
+      if (!target) return null;
+      const key = target.startsWith("notify.") ? target.slice("notify.".length) : target;
+      const notifyServices = (this._hass.services && this._hass.services.notify) || {};
+      if (notifyServices[key]) {
+        return { service: `notify.${key}` };
+      }
+      return { service: "notify.send_message", target: { entity_id: target } };
+    }
+
+    _parseGeofenceMeta(description) {
+      if (!description) return {};
+      const idx = description.indexOf(GFM_META_MARKER);
+      if (idx === -1) return {};
+      try {
+        return JSON.parse(description.slice(idx + GFM_META_MARKER.length));
+      } catch (e) {
+        return {};
+      }
+    }
+
+    async _loadGeofences() {
+      if (!this._hass) return;
+      this._geofenceStatus = "";
+      const zoneIds = Object.keys(this._hass.states).filter((eid) => eid.startsWith(`zone.${GFM_ZONE_PREFIX}`));
+      const results = [];
+      for (const zoneEid of zoneIds) {
+        const slug = zoneEid.slice(`zone.${GFM_ZONE_PREFIX}`.length);
+        const zoneState = this._hass.states[zoneEid];
+        if (!zoneState) continue;
+        const automationEid = Object.keys(this._hass.states).find(
+          (eid) =>
+            eid.startsWith("automation.") &&
+            this._hass.states[eid].attributes &&
+            this._hass.states[eid].attributes.id === `${GFM_AUTOMATION_PREFIX}${slug}`
+        );
+        let meta = {};
+        if (automationEid) {
+          try {
+            const cfg = await this._hass.callApi(
+              "GET",
+              `config/automation/config/${GFM_AUTOMATION_PREFIX}${slug}`
+            );
+            meta = this._parseGeofenceMeta(cfg && cfg.description);
+          } catch (e) {
+            console.warn("[googlefindmy-card-tracker] No se pudo leer la automatización de la geocerca:", slug, e);
+          }
+        }
+        results.push({
+          slug,
+          zoneEntityId: zoneEid,
+          automationEntityId: automationEid || null,
+          name: (zoneState.attributes && zoneState.attributes.friendly_name) || slug,
+          lat: zoneState.attributes ? zoneState.attributes.latitude : null,
+          lon: zoneState.attributes ? zoneState.attributes.longitude : null,
+          radius: zoneState.attributes ? zoneState.attributes.radius : null,
+          meta,
+        });
+      }
+      this._geofences = results;
+      this._geofencesLoaded = true;
+      this._renderGeofenceList();
+      this._drawGeofenceMapLayers();
+    }
+
+    _renderGeofenceList() {
+      const list = this.shadowRoot.getElementById("gfm-geofence-list");
+      const statusEl = this.shadowRoot.getElementById("gfm-geofence-status");
+      if (statusEl) statusEl.textContent = this._geofenceStatus || "";
+      if (!list) return;
+      if (this._geofences.length === 0) {
+        list.innerHTML = `<div class="gfm-geofence-empty">Todavía no hay geocercas configuradas.</div>`;
+        return;
+      }
+      list.innerHTML = this._geofences
+        .map((g) => {
+          const deviceEntity = g.meta.device || "";
+          const deviceState = deviceEntity ? this._hass.states[deviceEntity] : null;
+          const deviceName = deviceState
+            ? deviceState.attributes.friendly_name || deviceEntity
+            : deviceEntity || "?";
+          const notifyLabel = g.meta.notifyTarget
+            ? g.meta.notifyTarget.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ")
+            : "sin push";
+          const flags = [g.meta.persistent ? "panel HA" : null, g.meta.onEnter ? "también al entrar" : null]
+            .filter(Boolean)
+            .join(" · ");
+          return `
+            <div class="gfm-geofence-item" data-slug="${escapeHTML(g.slug)}">
+              <div class="gfm-geofence-item-name">${escapeHTML(g.name)}</div>
+              <div class="gfm-geofence-item-sub">📍 ${g.radius != null ? Math.round(g.radius) : "?"} m · 📱 ${escapeHTML(deviceName)}</div>
+              <div class="gfm-geofence-item-sub">🔔 ${escapeHTML(notifyLabel)}${flags ? " · " + escapeHTML(flags) : ""}</div>
+              <div class="gfm-geofence-item-actions">
+                <button data-action="edit" data-slug="${escapeHTML(g.slug)}">✏️ Editar</button>
+                <button data-action="delete" data-slug="${escapeHTML(g.slug)}">🗑️ Borrar</button>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      list.querySelectorAll("button[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const slug = btn.dataset.slug;
+          if (btn.dataset.action === "edit") this._openGeofenceForm(slug);
+          else if (btn.dataset.action === "delete") this._deleteGeofence(slug);
+        });
+      });
+    }
+
+    _populateGeofenceFormSelects() {
+      const deviceSel = this.shadowRoot.getElementById("gfm-geo-device");
+      if (deviceSel) {
+        const entities = this._resolveEntities();
+        deviceSel.innerHTML = entities
+          .map((e) => {
+            const state = this._hass.states[e.entity];
+            const label = e.name || (state ? state.attributes.friendly_name : e.entity);
+            return `<option value="${escapeHTML(e.entity)}">${escapeHTML(label)}</option>`;
+          })
+          .join("");
+      }
+      const notifySel = this.shadowRoot.getElementById("gfm-geo-notify");
+      if (notifySel) {
+        const targets = this._getMobileNotifyTargets();
+        const options = [`<option value="">(sin notificación push)</option>`].concat(
+          targets.map((t) => `<option value="${escapeHTML(t.value)}">${escapeHTML(t.label)}</option>`)
+        );
+        notifySel.innerHTML = options.join("");
+        if (targets.length === 0) {
+          const status = this.shadowRoot.getElementById("gfm-geofence-status");
+          if (status && !status.textContent) {
+            status.textContent =
+              "No se encontró ningún notify.mobile_app_* — instalá la app compañera de Home Assistant en tu celular para poder recibir push.";
+          }
+        }
+      }
+    }
+
+    _openGeofenceForm(slugOrNull) {
+      this._closeGeofenceForm(false);
+      this._populateGeofenceFormSelects();
+
+      const existing = slugOrNull ? this._geofences.find((g) => g.slug === slugOrNull) : null;
+      const entities = this._resolveEntities();
+      const defaultDevice = existing
+        ? existing.meta.device
+        : this._selectedEntityId || (entities[0] && entities[0].entity) || "";
+
+      this._geofenceEditingSlug = existing ? existing.slug : null;
+      this._geofenceDraft = {
+        name: existing ? existing.name : "",
+        device: defaultDevice || "",
+        lat: existing ? existing.lat : null,
+        lon: existing ? existing.lon : null,
+        radius: existing && existing.radius != null ? Math.round(existing.radius) : 150,
+        notifyTarget: existing ? existing.meta.notifyTarget || "" : "",
+        persistent: existing ? existing.meta.persistent !== false : true,
+        onEnter: existing ? !!existing.meta.onEnter : false,
+      };
+
+      const $ = (id) => this.shadowRoot.getElementById(id);
+      const nameInput = $("gfm-geo-name");
+      if (nameInput) nameInput.value = this._geofenceDraft.name;
+      const deviceSel = $("gfm-geo-device");
+      if (deviceSel) deviceSel.value = this._geofenceDraft.device;
+      const radiusInput = $("gfm-geo-radius");
+      if (radiusInput) radiusInput.value = this._geofenceDraft.radius;
+      const radiusLabel = $("gfm-geo-radius-val");
+      if (radiusLabel) radiusLabel.textContent = `${this._geofenceDraft.radius} m`;
+      const notifySel = $("gfm-geo-notify");
+      if (notifySel) notifySel.value = this._geofenceDraft.notifyTarget;
+      const persistentCb = $("gfm-geo-persistent");
+      if (persistentCb) persistentCb.checked = this._geofenceDraft.persistent;
+      const onEnterCb = $("gfm-geo-onenter");
+      if (onEnterCb) onEnterCb.checked = this._geofenceDraft.onEnter;
+      const formError = $("gfm-geo-form-error");
+      if (formError) formError.textContent = "";
+
+      const form = $("gfm-geofence-form");
+      if (form) form.classList.remove("gfm-hidden");
+
+      this._updateGeofenceCenterReadout();
+      this._drawGeofencePreview();
+    }
+
+    _closeGeofenceForm(hideForm = true) {
+      this._geofenceDraft = null;
+      this._geofenceEditingSlug = null;
+      if (hideForm) {
+        const form = this.shadowRoot.getElementById("gfm-geofence-form");
+        if (form) form.classList.add("gfm-hidden");
+      }
+      const formError = this.shadowRoot.getElementById("gfm-geo-form-error");
+      if (formError) formError.textContent = "";
+      if (this._map && this._geofenceMapClickHandler) {
+        this._map.off("click", this._geofenceMapClickHandler);
+        this._geofenceMapClickHandler = null;
+      }
+      this._geofencePlacing = false;
+      const mapEl = this.shadowRoot.getElementById("gfm-map");
+      if (mapEl) mapEl.style.cursor = "";
+      if (this._map && this._geofencePreviewLayer) {
+        this._map.removeLayer(this._geofencePreviewLayer);
+        this._geofencePreviewLayer = null;
+      }
+    }
+
+    _updateGeofenceCenterReadout() {
+      const readout = this.shadowRoot.getElementById("gfm-geo-center-readout");
+      if (!readout) return;
+      const d = this._geofenceDraft;
+      if (!d || d.lat == null || d.lon == null) {
+        readout.textContent = "Sin elegir — hacé click en el mapa";
+      } else {
+        readout.textContent = `${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}`;
+      }
+    }
+
+    _armGeofencePlacement() {
+      if (!this._map || !this._geofenceDraft) return;
+      if (this._geofenceMapClickHandler) {
+        this._map.off("click", this._geofenceMapClickHandler);
+      }
+      this._geofencePlacing = true;
+      const mapEl = this.shadowRoot.getElementById("gfm-map");
+      if (mapEl) mapEl.style.cursor = "crosshair";
+      const handler = (e) => {
+        if (!this._geofenceDraft) return;
+        this._geofenceDraft.lat = e.latlng.lat;
+        this._geofenceDraft.lon = e.latlng.lng;
+        this._geofencePlacing = false;
+        if (mapEl) mapEl.style.cursor = "";
+        this._updateGeofenceCenterReadout();
+        this._drawGeofencePreview();
+        if (this._map) this._map.off("click", handler);
+        this._geofenceMapClickHandler = null;
+      };
+      this._geofenceMapClickHandler = handler;
+      this._map.on("click", handler);
+    }
+
+    _drawGeofencePreview() {
+      if (!this._map || !window.L) return;
+      const L = window.L;
+      if (this._geofencePreviewLayer) {
+        this._map.removeLayer(this._geofencePreviewLayer);
+        this._geofencePreviewLayer = null;
+      }
+      const d = this._geofenceDraft;
+      if (!d || d.lat == null || d.lon == null) return;
+      this._geofencePreviewLayer = L.layerGroup([
+        L.circle([d.lat, d.lon], {
+          radius: d.radius,
+          color: "#9c27b0",
+          weight: 2,
+          fillOpacity: 0.12,
+        }),
+        L.marker([d.lat, d.lon], {
+          icon: L.divIcon({
+            className: "",
+            html: `<div class="gfm-marker-geofence-center">📍</div>`,
+            iconSize: [22, 22],
+            iconAnchor: [11, 22],
+          }),
+        }),
+      ]).addTo(this._map);
+    }
+
+    _drawGeofenceMapLayers() {
+      if (!this._map || !window.L) return;
+      const L = window.L;
+      if (this._geofenceMapLayerGroup) {
+        this._map.removeLayer(this._geofenceMapLayerGroup);
+        this._geofenceMapLayerGroup = null;
+      }
+      if (!this._geofences || this._geofences.length === 0) return;
+      const layers = [];
+      this._geofences.forEach((g) => {
+        if (g.lat == null || g.lon == null) return;
+        const circle = L.circle([g.lat, g.lon], {
+          radius: g.radius || 100,
+          color: "#9c27b0",
+          weight: 2,
+          fillOpacity: 0.06,
+          opacity: 0.5,
+          dashArray: "4 4",
+        });
+        circle.bindPopup(
+          `<b>🎯 ${escapeHTML(g.name)}</b><br/>Radio: ${g.radius != null ? Math.round(g.radius) : "?"} m`
+        );
+        layers.push(circle);
+      });
+      this._geofenceMapLayerGroup = L.layerGroup(layers).addTo(this._map);
+    }
+
+    _buildZoneConfig(draft) {
+      return {
+        name: draft.name,
+        latitude: draft.lat,
+        longitude: draft.lon,
+        radius: draft.radius,
+        icon: "mdi:map-marker-radius",
+        passive: false,
+      };
+    }
+
+    _buildAutomationConfig(draft, slug, zoneEntityId) {
+      const buildActions = (verb, emoji, notificationSuffix) => {
+        const actions = [];
+        if (draft.notifyTarget) {
+          const svc = this._notifyServiceCallFor(draft.notifyTarget);
+          if (svc) {
+            actions.push({
+              service: svc.service,
+              ...(svc.target ? { target: svc.target } : {}),
+              data: {
+                title: `${emoji} ${verb} de ${draft.name}`,
+                message: `{{ trigger.to_state.attributes.friendly_name if trigger.to_state else '${draft.device}' }} ${verb} de "${draft.name}" a las {{ now().strftime('%H:%M') }}`,
+              },
+            });
+          }
+        }
+        if (draft.persistent) {
+          actions.push({
+            service: "persistent_notification.create",
+            data: {
+              title: `${emoji} ${verb} de ${draft.name}`,
+              message: `{{ trigger.to_state.attributes.friendly_name if trigger.to_state else '${draft.device}' }} ${verb} de la geocerca "${draft.name}".`,
+              notification_id: `gfm_geofence_${slug}_${notificationSuffix}`,
+            },
+          });
+        }
+        return actions;
+      };
+
+      const triggers = [
+        { platform: "zone", entity_id: draft.device, zone: zoneEntityId, event: "leave", id: "leave" },
+      ];
+      const leaveActions = buildActions("Salió", "🔴", "leave");
+      let action = leaveActions;
+
+      if (draft.onEnter) {
+        triggers.push({
+          platform: "zone",
+          entity_id: draft.device,
+          zone: zoneEntityId,
+          event: "enter",
+          id: "enter",
+        });
+        const enterActions = buildActions("Entró", "🟢", "enter");
+        action = [
+          {
+            choose: [
+              { conditions: [{ condition: "trigger", id: "leave" }], sequence: leaveActions },
+              { conditions: [{ condition: "trigger", id: "enter" }], sequence: enterActions },
+            ],
+          },
+        ];
+      }
+
+      const meta = {
+        v: 1,
+        device: draft.device,
+        zone: zoneEntityId,
+        notifyTarget: draft.notifyTarget,
+        persistent: draft.persistent,
+        onEnter: draft.onEnter,
+      };
+
+      return {
+        alias: `GFM Geocerca: ${draft.name}`,
+        description: `Generado por Google FindMy Card Tracker. No editar el JSON de la linea de abajo a mano.\n${GFM_META_MARKER}${JSON.stringify(
+          meta
+        )}`,
+        trigger: triggers,
+        condition: [],
+        action,
+        mode: "single",
+      };
+    }
+
+    async _saveGeofenceForm() {
+      const d = this._geofenceDraft;
+      const formError = this.shadowRoot.getElementById("gfm-geo-form-error");
+      if (!d) return;
+      const nameInput = this.shadowRoot.getElementById("gfm-geo-name");
+      d.name = nameInput ? nameInput.value.trim() : d.name;
+      const deviceSel = this.shadowRoot.getElementById("gfm-geo-device");
+      d.device = deviceSel ? deviceSel.value : d.device;
+      const notifySel = this.shadowRoot.getElementById("gfm-geo-notify");
+      d.notifyTarget = notifySel ? notifySel.value : d.notifyTarget;
+      const persistentCb = this.shadowRoot.getElementById("gfm-geo-persistent");
+      d.persistent = persistentCb ? persistentCb.checked : d.persistent;
+      const onEnterCb = this.shadowRoot.getElementById("gfm-geo-onenter");
+      d.onEnter = onEnterCb ? onEnterCb.checked : d.onEnter;
+
+      if (!d.name) {
+        if (formError) formError.textContent = "Ponele un nombre a la geocerca.";
+        return;
+      }
+      if (!d.device) {
+        if (formError) formError.textContent = "Elegí a qué dispositivo aplica.";
+        return;
+      }
+      if (d.lat == null || d.lon == null) {
+        if (formError) formError.textContent = "Elegí el centro de la geocerca haciendo click en el mapa.";
+        return;
+      }
+      if (!d.notifyTarget && !d.persistent) {
+        if (formError) formError.textContent = "Elegí al menos un canal de notificación (push o panel de HA).";
+        return;
+      }
+
+      if (this._geofenceBusy) return;
+      this._geofenceBusy = true;
+      if (formError) formError.textContent = "";
+      const saveBtn = this.shadowRoot.getElementById("gfm-geo-save");
+      if (saveBtn) saveBtn.textContent = "Guardando...";
+
+      const isEdit = !!this._geofenceEditingSlug;
+      const slug = isEdit ? this._geofenceEditingSlug : `${slugify(d.name)}_${randomSuffix()}`;
+      const zoneEntityId = `zone.${GFM_ZONE_PREFIX}${slug}`;
+
+      try {
+        await this._hass.callApi(
+          "POST",
+          `config/zone/config/${GFM_ZONE_PREFIX}${slug}`,
+          this._buildZoneConfig(d)
+        );
+        try {
+          await this._hass.callService("zone", "reload", {});
+        } catch (e) {
+          /* algunas instalaciones no exponen zone.reload; no es fatal */
+        }
+        await this._hass.callApi(
+          "POST",
+          `config/automation/config/${GFM_AUTOMATION_PREFIX}${slug}`,
+          this._buildAutomationConfig(d, slug, zoneEntityId)
+        );
+        try {
+          await this._hass.callService("automation", "reload", {});
+        } catch (e) {
+          /* ignore */
+        }
+        this._closeGeofenceForm();
+        this._geofencesLoaded = false;
+        await this._loadGeofences();
+      } catch (e) {
+        console.error("[googlefindmy-card-tracker] Error guardando geocerca:", e);
+        if (formError) {
+          formError.textContent = this._isPermissionError(e)
+            ? "Tu usuario de Home Assistant no tiene permisos de administrador — se necesitan para crear zonas y automatizaciones."
+            : `No se pudo guardar la geocerca: ${this._formatApiError(e)}`;
+        }
+      } finally {
+        this._geofenceBusy = false;
+        if (saveBtn) saveBtn.textContent = "Guardar";
+      }
+    }
+
+    async _deleteGeofence(slug) {
+      const g = this._geofences.find((x) => x.slug === slug);
+      const name = g ? g.name : slug;
+      if (
+        !window.confirm(
+          `¿Borrar la geocerca "${name}"? Esto elimina su zona y su automatización de Home Assistant.`
+        )
+      ) {
+        return;
+      }
+      if (this._geofenceBusy) return;
+      this._geofenceBusy = true;
+      this._geofenceStatus = "";
+      try {
+        try {
+          await this._hass.callApi("DELETE", `config/automation/config/${GFM_AUTOMATION_PREFIX}${slug}`);
+        } catch (e) {
+          /* puede que ya no exista */
+        }
+        try {
+          await this._hass.callService("automation", "reload", {});
+        } catch (e) {
+          /* ignore */
+        }
+        await this._hass.callApi("DELETE", `config/zone/config/${GFM_ZONE_PREFIX}${slug}`);
+        try {
+          await this._hass.callService("zone", "reload", {});
+        } catch (e) {
+          /* ignore */
+        }
+        this._geofencesLoaded = false;
+        await this._loadGeofences();
+      } catch (e) {
+        console.error("[googlefindmy-card-tracker] Error borrando geocerca:", e);
+        this._geofenceStatus = this._isPermissionError(e)
+          ? "Tu usuario de Home Assistant no tiene permisos de administrador — se necesitan para borrar zonas y automatizaciones."
+          : `No se pudo borrar la geocerca: ${this._formatApiError(e)}`;
+        this._renderGeofenceList();
+      } finally {
+        this._geofenceBusy = false;
+      }
+    }
+  }
+
+  class GoogleFindMyCardTrackerEditor extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+      this._config = {};
+    }
+
+    setConfig(config) {
+      this._config = { ...DEFAULT_CONFIG, ...config };
+      this._render();
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+    }
+
+    _entitiesToText(entities) {
+      return (entities || [])
+        .map((e) => {
+          if (typeof e === "string") return e;
+          return [e.entity, e.name || "", e.icon || ""].filter((v, i) => i === 0 || v).join("|");
+        })
+        .join("\n");
+    }
+
+    _textToEntities(text) {
+      return text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [entity, name, icon] = line.split("|").map((v) => (v || "").trim());
+          if (!name && !icon) return entity;
+          const obj = { entity };
+          if (name) obj.name = name;
+          if (icon) obj.icon = icon;
+          return obj;
+        });
+    }
+
+    _emitChange() {
+      this.dispatchEvent(
+        new CustomEvent("config-changed", {
+          detail: { config: this._config },
+          bubbles: true,
+          composed: true,
+        })
+      );
+    }
+
+    _render() {
+      const c = this._config;
+      const checkbox = (key, label) => `
+        <label class="gfm-ed-row">
+          <input type="checkbox" data-key="${key}" ${c[key] ? "checked" : ""}/>
+          <span>${label}</span>
+        </label>`;
+
+      this.shadowRoot.innerHTML = `
+        <style>
+          .gfm-ed-wrap { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
+          .gfm-ed-row { display: flex; align-items: center; gap: 8px; font-size: 0.95em; }
+          .gfm-ed-field label { display:block; font-size: 0.85em; margin-bottom: 4px; opacity: .8; }
+          .gfm-ed-field input[type=text], .gfm-ed-field textarea, .gfm-ed-field select {
+            width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
+            border: 1px solid var(--divider-color, #ccc); font-family: inherit;
+          }
+          .gfm-ed-field textarea { min-height: 70px; font-family: monospace; font-size: 0.85em; }
+          .gfm-ed-section { font-weight: 600; margin-top: 6px; border-top: 1px solid var(--divider-color,#eee); padding-top:8px; }
+          .gfm-ed-hint { font-size: 0.75em; opacity: 0.7; margin-top: -4px; }
+        </style>
+        <div class="gfm-ed-wrap">
+          <div class="gfm-ed-field">
+            <label>Título</label>
+            <input type="text" id="ed-title" value="${escapeHTML(c.title)}" />
+          </div>
+
+          <div class="gfm-ed-field">
+            <label>Entidades (una por línea: entity_id|Nombre opcional|icono opcional)</label>
+            <textarea id="ed-entities">${escapeHTML(this._entitiesToText(c.entities))}</textarea>
+            <div class="gfm-ed-hint">Ej: device_tracker.iphone|iPhone de Juan|mdi:cellphone-iphone</div>
+          </div>
+
+          <div class="gfm-ed-field">
+            <label>Filtrar por palabra clave (opcional)</label>
+            <input type="text" id="ed-keywords" value="${escapeHTML(c.filter_keywords)}" />
+          </div>
+
+          <div class="gfm-ed-field">
+            <label>Rango de historial por defecto</label>
+            <select id="ed-days">
+              ${[1, 3, 7, 14]
+                .map((d) => `<option value="${d}" ${c.history_days === d ? "selected" : ""}>${d} día(s)</option>`)
+                .join("")}
+            </select>
+            <div class="gfm-ed-hint">También se puede elegir un rango de fecha/hora personalizado desde la propia card (📅 Filtros → 🗓️ Rango).</div>
+          </div>
+
+          <div class="gfm-ed-section">Visualización</div>
+          ${checkbox("show_last_seen", "Mostrar última vez visto")}
+          ${checkbox("show_location_name", "Mostrar nombre de ubicación")}
+          ${checkbox("enable_actions", "Habilitar acciones (reproducir sonido)")}
+          ${checkbox("keep_device_list_pinned", "Mantener lista de dispositivos fija")}
+          ${checkbox("show_path_lines", "Mostrar línea de recorrido")}
+
+          <div class="gfm-ed-section">🗺️ Recorrido</div>
+          ${checkbox("show_start_end_markers", "🏁 Marcador de inicio / 🔴 fin")}
+          ${checkbox("show_numbered_markers", "🔢 Marcadores numerados")}
+          ${checkbox("show_direction_arrows", "➜ Flechas de dirección")}
+          ${checkbox("enable_playback", "🎞️ Reproducción del recorrido")}
+          ${checkbox("show_statistics", "📊 Estadísticas")}
+          ${checkbox("enable_export", "📁 Exportación GPX/KML")}
+          <div class="gfm-ed-hint">🧲 Agrupar paradas largas se activa/desactiva desde el botón imán en la propia card (afecta solo cómo se dibuja, no los datos exportados).</div>
+
+          <div class="gfm-ed-section">🎯 Geocercas y alertas</div>
+          ${checkbox("enable_geofences", "Habilitar panel de geocercas (crea zonas + automatizaciones reales de HA)")}
+          <div class="gfm-ed-hint">Cada geocerca se define y edita desde el botón 🎯 en la propia card (elegís el centro haciendo click en el mapa). Requiere que tu usuario de Home Assistant sea administrador.</div>
+        </div>
+      `;
+
+      this.shadowRoot.getElementById("ed-title").addEventListener("input", (e) => {
+        this._config = { ...this._config, title: e.target.value };
+        this._emitChange();
+      });
+      this.shadowRoot.getElementById("ed-entities").addEventListener("change", (e) => {
+        this._config = { ...this._config, entities: this._textToEntities(e.target.value) };
+        this._emitChange();
+      });
+      this.shadowRoot.getElementById("ed-keywords").addEventListener("input", (e) => {
+        this._config = { ...this._config, filter_keywords: e.target.value };
+        this._emitChange();
+      });
+      this.shadowRoot.getElementById("ed-days").addEventListener("change", (e) => {
+        this._config = { ...this._config, history_days: parseInt(e.target.value, 10) };
+        this._emitChange();
+      });
+      this.shadowRoot.querySelectorAll('input[type="checkbox"][data-key]').forEach((input) => {
+        input.addEventListener("change", (e) => {
+          this._config = { ...this._config, [e.target.dataset.key]: e.target.checked };
+          this._emitChange();
+        });
+      });
+    }
+  }
+
+  if (!customElements.get(CARD_TAG)) customElements.define(CARD_TAG, GoogleFindMyCardTracker);
+  if (!customElements.get(EDITOR_TAG)) customElements.define(EDITOR_TAG, GoogleFindMyCardTrackerEditor);
+
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: CARD_TAG,
+    name: "Google FindMy Card Tracker",
+    description:
+      "Mapa interactivo para Google Find My Device con inicio/fin, marcadores numerados, flechas de dirección, reproducción del recorrido, estadísticas, exportación GPX/KML, rango de fecha/hora personalizado, agrupamiento de paradas largas, pantalla completa y geocercas con notificaciones de salida/entrada.",
+    preview: true,
+    documentationURL: "https://github.com/davicho16/googlefindmy-card-tracker",
+  });
+
+  console.info(
+    `%c GOOGLEFINDMY-CARD-TRACKER %c v${CARD_VERSION} `,
+    "color: white; background: #2196f3; font-weight: 700;",
+    "color: #2196f3; background: white; font-weight: 700;"
+  );
+})();
